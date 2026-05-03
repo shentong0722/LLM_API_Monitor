@@ -5,9 +5,10 @@
 ## 架构
 
 - 前端：Vite + React，静态资源构建到 `dist/`。
-- 函数：`edge-functions/api/[[default]].js`，提供 `/api/summary`、`/api/probe`、`/api/health`。
+- 函数：`cloud-functions/api/[[default]].js`，提供 `/api/summary`、`/api/probe`、`/api/health`。
 - 存储：推荐绑定 EdgeOne Pages KV，变量名设置为 `LLM_MONITOR_KV`。
 - 定时：使用外部 Cron 定时请求 `/api/probe?token=...`，面板只读请求 `/api/summary`。
+- 执行时长：探测接口使用 Cloud Functions，并在 `edgeone.json` 将 Node.js 最大执行时长配置为 60 秒，避免长流式请求被 Edge Functions 的短执行场景截断。
 
 ## 本地开发
 
@@ -83,7 +84,7 @@ edgeone pages dev
    - Build command：`npm run build`
    - Output directory：`dist`
    - Install command：`npm install`
-   - `npm run build` 会把 `edge-functions/` 同步到 `dist/edge-functions/`，用于兼容只发布输出目录的构建流程。
+   - `npm run build` 会把 `cloud-functions/` 和 `shared/` 同步到 `dist/`，用于兼容只发布输出目录的构建流程。
 4. 在项目环境变量中配置 `LLM_API_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`PROBE_CRON_SECRET` 等变量。
 5. 开通 Pages KV，创建 Namespace，并在项目里绑定 KV，变量名填写 `LLM_MONITOR_KV`。
 6. 部署项目。部署后确认：
