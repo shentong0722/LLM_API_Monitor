@@ -1,5 +1,7 @@
 {
+  "nodeVersion": "20.18.0",
   "cloudFunctions": {
+    "mainlandRegions": ["ap-guangzhou"],
     "nodejs": {
       "maxDuration": 60
     }

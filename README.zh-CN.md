@@ -10,6 +10,7 @@
 - 存储：推荐绑定 EdgeOne Pages KV，变量名设置为 `LLM_MONITOR_KV`。
 - 定时：使用外部 Cron 定时请求 `/api/probe?token=...`，面板只读请求 `/api/summary`。
 - 执行时长：探测接口使用 Cloud Functions，并在 `edgeone.json` 将 Node.js 最大执行时长配置为 60 秒，避免长流式请求被 Edge Functions 的短执行场景截断。
+- 构建环境：`edgeone.json` 固定构建 Node.js 版本为 `20.18.0`，并显式指定 Cloud Functions 中国大陆地域为 `ap-guangzhou`。
 
 ## 本地开发
 

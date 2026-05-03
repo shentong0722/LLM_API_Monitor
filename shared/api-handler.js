@@ -204,6 +204,33 @@ async function runProbe(target, context) {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    const ingestPayload = (payload) => {
+      if (!payload || payload === '[DONE]') {
+        return;
+      }
+
+      const parsed = safeJsonParse(payload);
+
+      if (!parsed) {
+        return;
+      }
+
+      const completionTokens = extractCompletionTokens(parsed);
+
+      if (Number.isFinite(completionTokens)) {
+        usageCompletionTokens = completionTokens;
+      }
+
+      const deltaText = extractDeltaText(parsed);
+
+      if (deltaText) {
+        const tokenTimeMs = nowMs();
+        firstTokenMs = firstTokenMs ?? tokenTimeMs;
+        outputText += deltaText;
+        chunkCount += 1;
+      }
+    };
+
     while (true) {
       const { value, done } = await reader.read();
 
@@ -212,41 +239,21 @@ async function runProbe(target, context) {
       }
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || '';
+      const extracted = extractStreamPayloads(buffer);
+      buffer = extracted.rest;
 
-      for (const line of lines) {
-        const event = parseSseLine(line);
-
-        if (!event || event === '[DONE]') {
-          continue;
-        }
-
-        const parsed = safeJsonParse(event);
-        const completionTokens = parsed?.usage?.completion_tokens;
-
-        if (Number.isFinite(completionTokens)) {
-          usageCompletionTokens = completionTokens;
-        }
-
-        const deltaText = extractDeltaText(parsed);
-
-        if (deltaText) {
-          const tokenTimeMs = nowMs();
-          firstTokenMs = firstTokenMs ?? tokenTimeMs;
-          outputText += deltaText;
-          chunkCount += 1;
-        }
+      for (const payload of extracted.payloads) {
+        ingestPayload(payload);
       }
     }
 
-    if (buffer.trim()) {
-      const event = parseSseLine(buffer.trim());
-      const parsed = safeJsonParse(event);
-      const completionTokens = parsed?.usage?.completion_tokens;
+    buffer += decoder.decode();
 
-      if (Number.isFinite(completionTokens)) {
-        usageCompletionTokens = completionTokens;
+    if (buffer.trim()) {
+      const extracted = extractStreamPayloads(buffer, { flush: true });
+
+      for (const payload of extracted.payloads) {
+        ingestPayload(payload);
       }
     }
 
@@ -657,21 +664,106 @@ function extractDeltaText(parsed) {
   const choice = parsed?.choices?.[0];
   const delta = choice?.delta || {};
 
-  return delta.content || delta.reasoning_content || choice?.text || parsed?.output_text || '';
+  return toText(
+    delta.content ??
+      delta.reasoning_content ??
+      delta.reasoning ??
+      choice?.message?.content ??
+      choice?.message?.reasoning_content ??
+      choice?.text ??
+      parsed?.message?.content ??
+      parsed?.delta?.content ??
+      parsed?.response ??
+      parsed?.content ??
+      parsed?.output_text ??
+      parsed?.text ??
+      '',
+  );
 }
 
-function parseSseLine(line) {
-  const trimmed = line.trim();
+function extractCompletionTokens(parsed) {
+  return numberOrUndefined(
+    parsed?.usage?.completion_tokens ??
+      parsed?.usage?.output_tokens ??
+      parsed?.usage?.completionTokens ??
+      parsed?.usage?.generated_tokens ??
+      parsed?.completion_tokens ??
+      parsed?.output_tokens ??
+      parsed?.eval_count,
+  );
+}
 
-  if (!trimmed || trimmed.startsWith(':')) {
-    return null;
+function extractStreamPayloads(buffer, { flush = false } = {}) {
+  const lines = buffer.split(/\r?\n/);
+  const rest = flush ? '' : lines.pop() || '';
+  const payloads = [];
+  const pendingDataLines = [];
+
+  const pushPendingDataLines = () => {
+    if (pendingDataLines.length) {
+      payloads.push(pendingDataLines.join('\n').trim());
+      pendingDataLines.length = 0;
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed || trimmed.startsWith(':')) {
+      pushPendingDataLines();
+      continue;
+    }
+
+    if (trimmed.startsWith('data:')) {
+      pendingDataLines.push(trimmed.slice(5).trim());
+      continue;
+    }
+
+    if (/^(event|id|retry):/i.test(trimmed)) {
+      continue;
+    }
+
+    pushPendingDataLines();
+
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      payloads.push(trimmed);
+    }
   }
 
-  if (!trimmed.startsWith('data:')) {
-    return null;
+  if (flush && rest.trim()) {
+    const trimmed = rest.trim();
+
+    if (trimmed.startsWith('data:')) {
+      pendingDataLines.push(trimmed.slice(5).trim());
+    } else if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      pushPendingDataLines();
+      payloads.push(trimmed);
+    }
   }
 
-  return trimmed.slice(5).trim();
+  pushPendingDataLines();
+
+  return { payloads, rest };
+}
+
+function toText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+
+        return item?.text || item?.content || item?.value || '';
+      })
+      .join('');
+  }
+
+  return '';
 }
 
 function estimateTokenCount(text, chunkCount) {
@@ -811,6 +903,11 @@ function numberOrNull(value) {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function numberOrUndefined(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function average(values) {
