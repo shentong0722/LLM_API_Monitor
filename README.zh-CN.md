@@ -9,7 +9,7 @@
 - 共享逻辑：`shared/api-handler.js`。
 - 存储：推荐绑定 EdgeOne Pages KV，变量名设置为 `LLM_MONITOR_KV`。
 - 定时：使用外部 Cron 定时请求 `/api/probe?token=...`，面板只读请求 `/api/summary`。
-- 执行时长：探测接口使用 Cloud Functions，并在 `edgeone.json` 将 Node.js 最大执行时长配置为 60 秒，避免长流式请求被 Edge Functions 的短执行场景截断。
+- 执行时长：探测接口使用 Cloud Functions，并在 `edgeone.json` 将 Node.js 最大执行时长配置为 120 秒，避免长流式请求被 Edge Functions 的短执行场景截断。
 - 构建环境：`edgeone.json` 固定构建 Node.js 版本为 `20.18.0`，并显式指定 Cloud Functions 中国大陆地域为 `ap-guangzhou`。
 
 ## 本地开发
@@ -48,7 +48,12 @@ edgeone pages dev
 | `LLM_PROBE_INTERVAL_SECONDS` | 否 | 采样间隔，默认 `60` |
 | `LLM_PROBE_TIMEOUT_MS` | 否 | 单个模型的探测超时，默认 `30000` |
 | `LLM_PROBE_MODE` | 否 | `parallel` 或 `stagger`，默认 `parallel` |
-| `LLM_PROBE_STAGGER_MS` | 否 | `stagger` 模式下每个模型错开的毫秒数，默认 `0` |
+| `LLM_PROBE_STAGGER_MS` | 否 | `stagger` 模式下每个模型错开的毫秒数，默认 `0`，慢模型建议 `15000` 或 `30000` |
+| `LLM_HISTORY_RETENTION_HOURS` | 否 | 历史样本保留时长，默认 `168`，也就是 7 天 |
+| `LLM_HISTORY_LIMIT` | 否 | 每个模型最多保留的样本数，默认按保留时长和采样间隔自动计算 |
+| `LLM_UPTIME_WINDOW_HOURS` | 否 | Uptime 统计窗口，默认 `24` |
+| `LLM_GLOBAL_STATUS_WINDOW_HOURS` | 否 | 顶部全局状态统计窗口，默认 `1` |
+| `LLM_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT` | 否 | 顶部全局状态降级/故障阈值，默认 `20` |
 | `PROBE_CRON_SECRET` | 强烈建议 | 定时采样接口密钥 |
 | `LLM_STREAM_OPTIONS_INCLUDE_USAGE` | 否 | 是否请求流式 usage，默认 `true` |
 | `LLM_TTFT_DEGRADED_MS` | 否 | TTFT 降级阈值，默认 `3000` |
@@ -88,11 +93,11 @@ LLM_PROMPT=Reply_with_one_short_sentence.
 
 ## 状态规则
 
-全局状态不是只看最新一次采样，而是按最近 1 小时窗口计算。只有当某个模型最近 1 小时内超过 10% 的样本为降级或失败时，该模型才会显示为降级或故障。顶部全局状态卡片只显示当前有几个模型降级、几个模型故障。
+顶部全局状态不是只看最新一次采样，而是按最近 1 小时窗口计算。只有当某个模型最近 1 小时内达到 20% 的样本为降级或失败时，该模型才会计入顶部的降级或故障。模型概览列表中的正常/降级/故障仍然按每个模型最新一次样本显示。
 
 ### `GET /api/summary`
 
-公开只读接口，返回全局状态、`targets[]`、每个模型的最新样本、历史样本、24 小时 uptime 和聚合指标。
+公开只读接口，返回全局状态、`targets[]`、每个模型的最新样本、历史样本、24 小时 uptime 和聚合指标。默认保留最近 7 天历史样本。
 
 ### `GET /api/probe?token=PROBE_CRON_SECRET`
 
@@ -211,4 +216,5 @@ crontab -e
 - TTFT：从 Cloud Function 发起请求到收到首个非空流式内容片段。
 - TPS：优先使用上游流式 usage 中的 `completion_tokens`，否则用文本长度估算 token 数，再除以首 token 后的生成时长。
 - Uptime：默认统计最近 24 小时内成功样本占比。
+- 历史样本：默认保留最近 7 天；如果采样频率极高或模型很多，可以调低 `LLM_HISTORY_RETENTION_HOURS` 或提高采样间隔。
 - Stale：最近样本超过 `max(3 * interval, 180s)` 未更新时显示过期。

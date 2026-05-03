@@ -88,11 +88,17 @@ function App() {
   const config = summary?.config || {};
   const siteTitle = config.site_title || 'LLM API Monitor';
   const siteSubtitle = config.site_subtitle || 'OpenAI-compatible stream';
-  const degradedTargets = targets.filter((target) => target.status === 'degraded').length;
-  const downTargets = targets.filter((target) => target.status === 'down').length;
+  const globalTargetStatuses = targets.map((target) => target.one_hour_health?.status || target.status);
+  const degradedTargets = globalTargetStatuses.filter((statusValue) => statusValue === 'degraded').length;
+  const downTargets = globalTargetStatuses.filter((statusValue) => statusValue === 'down').length;
 
   return (
     <div className="app-shell">
+      <div className="visual-backdrop" aria-hidden="true">
+        <span className="backdrop-ribbon ribbon-a" />
+        <span className="backdrop-ribbon ribbon-b" />
+        <span className="backdrop-scan" />
+      </div>
       <header className="topbar">
         <div className="brand-block">
           <div className="brand-mark">
@@ -325,7 +331,7 @@ function ModelOverview({ rows, selectedId, onSelect }) {
                 </td>
                 <td>{formatMs(row.one_hour_summary?.ttft_avg_ms)}</td>
                 <td>{formatTps(row.one_hour_summary?.tps_avg)}</td>
-                <td>{formatPercent(row.one_hour_summary?.uptime_pct)}</td>
+                <td>{formatPercent(row.summary?.uptime_pct)}</td>
                 <td>{row.latest?.started_at ? relativeTime(row.latest.started_at) : '-'}</td>
                 <td className="error-cell">{row.latest?.error || '-'}</td>
               </tr>

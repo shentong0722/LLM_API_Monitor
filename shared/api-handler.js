@@ -8,8 +8,10 @@ const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_TOKENS = 80;
-const DEFAULT_HISTORY_LIMIT = 1440;
-const DEFAULT_WINDOW_HOURS = 24;
+const DEFAULT_HISTORY_RETENTION_HOURS = 168;
+const DEFAULT_UPTIME_WINDOW_HOURS = 24;
+const DEFAULT_GLOBAL_STATUS_WINDOW_HOURS = 1;
+const DEFAULT_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT = 20;
 const DEFAULT_SITE_TITLE = 'LLM API Monitor';
 const DEFAULT_SITE_SUBTITLE = 'OpenAI-compatible stream';
 const DEFAULT_PROJECT_REPO_URL = 'https://github.com/shentong0722/LLM_API_Monitor';
@@ -59,7 +61,7 @@ async function handleSummary(context) {
 
   return json({
     generated_at: new Date().toISOString(),
-    status: computeFleetStatus(targets),
+    status: computeFleetStatus(targets, 'one_hour_health'),
     config: publicConfig(config),
     storage: {
       available: store.available,
@@ -197,7 +199,7 @@ async function runProbe(target, context) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Upstream HTTP ${response.status}: ${truncate(errorText, 500)}`);
+      throw new Error(formatUpstreamHttpError(response.status, errorText));
     }
 
     if (!response.body?.getReader) {
@@ -352,11 +354,33 @@ function readConfig(env) {
     tpsDegradedBelow: toNumber(env.LLM_TPS_DEGRADED_BELOW, 5, 0, 1000),
   };
 
+  const intervalSeconds = toInteger(env.LLM_PROBE_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS, 10, 3600);
+  const historyRetentionHours = toInteger(
+    env.LLM_HISTORY_RETENTION_HOURS,
+    DEFAULT_HISTORY_RETENTION_HOURS,
+    1,
+    720,
+  );
+  const defaultHistoryLimit = Math.ceil((historyRetentionHours * 60 * 60) / intervalSeconds) + 10;
+
   const config = {
     ...base,
-    intervalSeconds: toInteger(env.LLM_PROBE_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS, 10, 3600),
-    historyLimit: toInteger(env.LLM_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT, 10, 5000),
-    windowHours: toInteger(env.LLM_UPTIME_WINDOW_HOURS, DEFAULT_WINDOW_HOURS, 1, 168),
+    intervalSeconds,
+    historyRetentionHours,
+    historyLimit: toInteger(env.LLM_HISTORY_LIMIT, defaultHistoryLimit, 10, 100000),
+    windowHours: toInteger(env.LLM_UPTIME_WINDOW_HOURS, DEFAULT_UPTIME_WINDOW_HOURS, 1, 168),
+    globalStatusWindowHours: toInteger(
+      env.LLM_GLOBAL_STATUS_WINDOW_HOURS,
+      DEFAULT_GLOBAL_STATUS_WINDOW_HOURS,
+      1,
+      168,
+    ),
+    globalStatusIncidentThresholdPct: toNumber(
+      env.LLM_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT,
+      DEFAULT_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT,
+      0,
+      100,
+    ),
     cronSecret: env.PROBE_CRON_SECRET || '',
     probeMode: env.LLM_PROBE_MODE === 'stagger' ? 'stagger' : 'parallel',
     probeStaggerMs: toInteger(env.LLM_PROBE_STAGGER_MS, 0, 0, 60000),
@@ -443,6 +467,10 @@ function publicConfig(config) {
     timeout_ms: config.timeoutMs,
     max_tokens: config.maxTokens,
     window_hours: config.windowHours,
+    history_retention_hours: config.historyRetentionHours,
+    history_limit_per_target: config.historyLimit,
+    global_status_window_hours: config.globalStatusWindowHours,
+    global_status_incident_threshold_pct: config.globalStatusIncidentThresholdPct,
     probe_mode: config.probeMode,
     site_title: config.siteTitle,
     site_subtitle: config.siteSubtitle,
@@ -541,7 +569,7 @@ async function readHistory(store, config) {
   const parsed = safeJsonParse(raw);
 
   if (Array.isArray(parsed)) {
-    return parsed.map(sanitizeSample).filter(Boolean);
+    return trimHistory(parsed.map(sanitizeSample).filter(Boolean), config);
   }
 
   const legacyRaw = await safeStoreGet(store, LEGACY_HISTORY_KEY);
@@ -551,22 +579,24 @@ async function readHistory(store, config) {
     return [];
   }
 
-  return legacyParsed
-    .map((sample) =>
-      sanitizeSample({
-        ...sample,
-        target_id: sample.target_id || config.targets[0].id,
-        target_label: sample.target_label || config.targets[0].label,
-      }),
-    )
-    .filter(Boolean);
+  return trimHistory(
+    legacyParsed
+      .map((sample) =>
+        sanitizeSample({
+          ...sample,
+          target_id: sample.target_id || config.targets[0].id,
+          target_label: sample.target_label || config.targets[0].label,
+        }),
+      )
+      .filter(Boolean),
+    config,
+  );
 }
 
 async function appendSamples(store, samples, config) {
   const history = await readHistory(store, config);
   const usableSamples = samples.map(sanitizeSample).filter(Boolean);
-  const limit = Math.max(config.historyLimit * Math.max(config.targets.length, 1), config.targets.length);
-  const nextHistory = [...history, ...usableSamples].slice(-limit);
+  const nextHistory = trimHistory([...history, ...usableSamples], config);
   const latestMap = await readLatestMap(store, config);
 
   for (const sample of usableSamples) {
@@ -577,6 +607,13 @@ async function appendSamples(store, samples, config) {
   await safeStorePut(store, LATEST_KEY, JSON.stringify(latestMap));
 
   return nextHistory;
+}
+
+function trimHistory(history, config) {
+  const cutoff = Date.now() - config.historyRetentionHours * 60 * 60 * 1000;
+  const limit = Math.max(config.historyLimit * Math.max(config.targets.length, 1), config.targets.length);
+
+  return history.filter((sample) => Date.parse(sample.started_at) >= cutoff).slice(-limit);
 }
 
 async function safeStoreGet(store, key) {
@@ -611,17 +648,19 @@ function buildTargetSummaries(config, history, latestMap) {
   return config.targets.map((target) => {
     const targetHistory = history.filter((sample) => sample.target_id === target.id);
     const latest = latestMap[target.id] || targetHistory.at(-1) || null;
-    const health = computeTargetHealth(targetHistory, latest, target, config);
+    const latestHealth = computeLatestTargetHealth(latest, target, config);
+    const oneHourHealth = computeTargetWindowHealth(targetHistory, latest, target, config);
 
     return {
       id: target.id,
       label: target.label,
-      status: health.status,
+      status: latestHealth.status,
       config: publicTargetConfig(target),
       latest,
       summary: summarizeHistory(targetHistory, config),
       one_hour_summary: summarizeHistory(targetHistory, config, 1),
-      one_hour_health: health,
+      latest_health: latestHealth,
+      one_hour_health: oneHourHealth,
       history: targetHistory,
     };
   });
@@ -650,12 +689,15 @@ function summarizeHistory(history, config, windowHours = config.windowHours) {
   };
 }
 
-function computeFleetStatus(targets) {
+function computeFleetStatus(targets, statusSource = 'status') {
   if (!targets.length) {
     return 'unknown';
   }
 
-  const statuses = targets.map((target) => target.status);
+  const statuses = targets.map((target) => {
+    const source = target[statusSource];
+    return typeof source === 'string' ? source : source?.status || target.status;
+  });
 
   if (statuses.every((status) => status === 'unknown')) {
     return 'unknown';
@@ -676,7 +718,7 @@ function computeFleetStatus(targets) {
   return 'up';
 }
 
-function computeTargetHealth(history, latest, target, config) {
+function computeLatestTargetHealth(latest, target, config) {
   if (!latest) {
     return createHealth('unknown');
   }
@@ -688,11 +730,26 @@ function computeTargetHealth(history, latest, target, config) {
     return createHealth('stale');
   }
 
-  const cutoff = Date.now() - 60 * 60 * 1000;
+  return createHealth(classifySampleHealth(latest, target));
+}
+
+function computeTargetWindowHealth(history, latest, target, config) {
+  if (!latest) {
+    return createHealth('unknown', config.globalStatusWindowHours);
+  }
+
+  const sampleAgeMs = Date.now() - Date.parse(latest.started_at);
+  const staleAfterMs = Math.max(config.intervalSeconds * 3000, 180000);
+
+  if (sampleAgeMs > staleAfterMs) {
+    return createHealth('stale', config.globalStatusWindowHours);
+  }
+
+  const cutoff = Date.now() - config.globalStatusWindowHours * 60 * 60 * 1000;
   const oneHourSamples = history.filter((sample) => Date.parse(sample.started_at) >= cutoff);
 
   if (!oneHourSamples.length) {
-    return createHealth('up');
+    return createHealth('up', config.globalStatusWindowHours);
   }
 
   const counts = oneHourSamples.reduce(
@@ -716,39 +773,43 @@ function computeTargetHealth(history, latest, target, config) {
   const incidentCount = counts.degraded + counts.down;
   const incidentPct = counts.total ? (incidentCount / counts.total) * 100 : 0;
   const downPct = counts.total ? (counts.down / counts.total) * 100 : 0;
+  const thresholdPct = config.globalStatusIncidentThresholdPct;
 
-  if (incidentPct > 10) {
+  if (incidentCount > 0 && incidentPct >= thresholdPct) {
     return {
-      status: downPct > 10 ? 'down' : 'degraded',
-      window_hours: 1,
+      status: counts.down > 0 && downPct >= thresholdPct ? 'down' : 'degraded',
+      window_hours: config.globalStatusWindowHours,
       total_samples: counts.total,
       degraded_samples: counts.degraded,
       failed_samples: counts.down,
       incident_samples: incidentCount,
       incident_pct: round(incidentPct, 4),
+      threshold_pct: thresholdPct,
     };
   }
 
   return {
     status: 'up',
-    window_hours: 1,
+    window_hours: config.globalStatusWindowHours,
     total_samples: counts.total,
     degraded_samples: counts.degraded,
     failed_samples: counts.down,
     incident_samples: incidentCount,
     incident_pct: round(incidentPct, 4),
+    threshold_pct: thresholdPct,
   };
 }
 
-function createHealth(status) {
+function createHealth(status, windowHours = 1) {
   return {
     status,
-    window_hours: 1,
+    window_hours: windowHours,
     total_samples: 0,
     degraded_samples: 0,
     failed_samples: 0,
     incident_samples: 0,
     incident_pct: null,
+    threshold_pct: null,
   };
 }
 
@@ -1001,6 +1062,22 @@ function sanitizeError(error) {
   }
 
   return truncate(error?.message || String(error), 500);
+}
+
+function formatUpstreamHttpError(status, bodyText) {
+  const trimmedBody = truncate(String(bodyText || '').trim(), 500);
+  const hints = {
+    408: 'upstream request timed out before a successful stream was returned',
+    429: 'upstream rate limit was reached',
+    500: 'upstream internal server error',
+    502: 'upstream gateway received an invalid backend response',
+    503: 'upstream service is unavailable',
+    504: 'upstream gateway timed out waiting for its backend',
+    524: 'upstream gateway timed out waiting for the model backend',
+  };
+  const detail = trimmedBody || hints[status] || 'upstream returned a non-2xx response without an error body';
+
+  return `Upstream HTTP ${status}: ${detail}`;
 }
 
 function truncate(value, maxLength) {

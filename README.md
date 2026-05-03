@@ -51,6 +51,12 @@ LLM_PROMPT=Reply_with_one_short_sentence_about_API_latency_monitoring.
 LLM_MAX_TOKENS=80
 LLM_PROBE_INTERVAL_SECONDS=60
 LLM_PROBE_TIMEOUT_MS=30000
+LLM_PROBE_MODE=parallel
+LLM_PROBE_STAGGER_MS=0
+LLM_HISTORY_RETENTION_HOURS=168
+LLM_UPTIME_WINDOW_HOURS=24
+LLM_GLOBAL_STATUS_WINDOW_HOURS=1
+LLM_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT=20
 PROBE_CRON_SECRET=replace-with-a-long-random-token
 
 SITE_TITLE=LLM_API_Monitor
@@ -58,6 +64,16 @@ SITE_SUBTITLE=OpenAI-compatible_stream
 ```
 
 EdgeOne Pages may reject spaces in environment variable values. For `SITE_TITLE`, `SITE_SUBTITLE`, and `LLM_PROMPT`, write `_` to render a space. Other environment variables are not decoded this way.
+
+For multiple slow models, set `LLM_PROBE_MODE=stagger` and `LLM_PROBE_STAGGER_MS=15000` or `30000` so probes start at different times instead of all at once. The included `edgeone.json` sets Cloud Functions `maxDuration` to 120 seconds, which is the documented configurable upper bound for EdgeOne Pages Cloud Functions.
+
+Status and retention defaults:
+
+- Stored sample history is retained for 168 hours, or 7 days.
+- `LLM_HISTORY_LIMIT` can cap the maximum samples retained per model. By default it is calculated from retention hours and probe interval.
+- Per-model uptime is calculated over the latest 24 hours.
+- The top global status is calculated over the latest 1 hour. A model only contributes degraded/down global status when at least 20% of its samples in that window are degraded or failed.
+- Each row in the model overview shows the latest sample status, while its TTFT and TPS columns show 1-hour averages.
 
 ```env
 SITE_TITLE=LLM_API_Monitor
