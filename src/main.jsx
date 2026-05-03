@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock3,
   Gauge,
+  ListChecks,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -19,6 +20,7 @@ const POLL_INTERVAL_MS = 20_000;
 
 function App() {
   const [summary, setSummary] = React.useState(null);
+  const [selectedTargetId, setSelectedTargetId] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -63,12 +65,28 @@ function App() {
     return () => window.clearInterval(timer);
   }, [loadSummary]);
 
+  const targets = React.useMemo(() => normalizeTargets(summary), [summary]);
+
+  React.useEffect(() => {
+    if (!targets.length) {
+      return;
+    }
+
+    if (!selectedTargetId || !targets.some((target) => target.id === selectedTargetId)) {
+      setSelectedTargetId(targets[0].id);
+    }
+  }, [selectedTargetId, targets]);
+
+  const selectedTarget = targets.find((target) => target.id === selectedTargetId) || targets[0] || null;
   const status = summary?.status || 'unknown';
-  const latest = summary?.latest || null;
-  const stats = summary?.summary || {};
-  const history = summary?.history || [];
-  const config = summary?.config || {};
   const statusMeta = getStatusMeta(status);
+  const selectedStatusMeta = getStatusMeta(selectedTarget?.status || 'unknown');
+  const selectedLatest = selectedTarget?.latest || null;
+  const selectedStats = selectedTarget?.summary || {};
+  const selectedHistory = selectedTarget?.history || [];
+  const config = summary?.config || {};
+  const availableTargets = targets.filter((target) => target.latest?.ok && target.status !== 'stale').length;
+  const failedTargets = targets.filter((target) => target.status === 'down').length;
 
   return (
     <div className="app-shell">
@@ -79,7 +97,7 @@ function App() {
           </div>
           <div>
             <h1>LLM API Monitor</h1>
-            <p>{config.model || 'OpenAI-compatible stream'}</p>
+            <p>{targets.length ? `${targets.length} models · OpenAI-compatible stream` : 'OpenAI-compatible stream'}</p>
           </div>
         </div>
 
@@ -93,15 +111,13 @@ function App() {
       </header>
 
       <main className="content">
-        {error ? (
-          <Notice tone="warn" icon={<AlertTriangle size={18} aria-hidden="true" />} text={error} />
-        ) : null}
+        {error ? <Notice tone="warn" icon={<AlertTriangle size={18} aria-hidden="true" />} text={error} /> : null}
 
         {summary && !config.configured && !loading ? (
           <Notice
             tone="danger"
             icon={<AlertTriangle size={18} aria-hidden="true" />}
-            text="上游 LLM API 环境变量尚未配置。"
+            text="上游 LLM API 环境变量尚未配置完整。"
           />
         ) : null}
 
@@ -116,51 +132,69 @@ function App() {
         <section className="metric-grid" aria-label="核心指标">
           <MetricCard
             icon={<Wifi size={20} aria-hidden="true" />}
-            label="实时状态"
+            label="全局状态"
             value={loading ? '加载中' : statusMeta.label}
-            detail={latest ? `最近采样 ${relativeTime(latest.started_at)}` : '暂无采样'}
+            detail={`${availableTargets}/${targets.length || 0} models available · ${failedTargets} failed`}
             tone={statusMeta.tone}
+          />
+          <MetricCard
+            icon={<ShieldCheck size={20} aria-hidden="true" />}
+            label="当前模型"
+            value={selectedTarget?.label || '-'}
+            detail={selectedLatest ? `最近采样 ${relativeTime(selectedLatest.started_at)}` : '暂无采样'}
+            tone={selectedStatusMeta.tone}
           />
           <MetricCard
             icon={<Timer size={20} aria-hidden="true" />}
             label="TTFT"
-            value={formatMs(latest?.ttft_ms)}
-            detail={`p95 ${formatMs(stats.ttft_p95_ms)} · p50 ${formatMs(stats.ttft_p50_ms)}`}
+            value={formatMs(selectedLatest?.ttft_ms)}
+            detail={`p95 ${formatMs(selectedStats.ttft_p95_ms)} · p50 ${formatMs(selectedStats.ttft_p50_ms)}`}
           />
           <MetricCard
             icon={<Gauge size={20} aria-hidden="true" />}
             label="TPS"
-            value={formatTps(latest?.tps)}
-            detail={`p50 ${formatTps(stats.tps_p50)} · token ${formatInteger(latest?.output_tokens)}`}
+            value={formatTps(selectedLatest?.tps)}
+            detail={`uptime ${formatPercent(selectedStats.uptime_pct)} · token ${formatInteger(selectedLatest?.output_tokens)}`}
           />
-          <MetricCard
-            icon={<ShieldCheck size={20} aria-hidden="true" />}
-            label="Uptime"
-            value={formatPercent(stats.uptime_pct)}
-            detail={`${stats.window_hours || 24}h · ${formatInteger(stats.total_samples)} samples`}
-          />
+        </section>
+
+        <section className="panel">
+          <PanelHeader icon={<ListChecks size={18} aria-hidden="true" />} title="模型概览" />
+          <ModelOverview rows={targets} selectedId={selectedTarget?.id} onSelect={setSelectedTargetId} />
         </section>
 
         <section className="dashboard-grid">
           <div className="panel wide-panel">
             <PanelHeader icon={<Zap size={18} aria-hidden="true" />} title="流式性能趋势" />
+            <div className="target-tabs" aria-label="模型切换">
+              {targets.map((target) => (
+                <button
+                  key={target.id}
+                  className={`target-tab ${target.id === selectedTarget?.id ? 'active' : ''}`}
+                  onClick={() => setSelectedTargetId(target.id)}
+                >
+                  <span className={`mini-dot ${target.status}`} />
+                  <span>{target.label}</span>
+                </button>
+              ))}
+            </div>
             <div className="chart-grid">
-              <LineChart data={history} metric="ttft_ms" color="#2563eb" label="TTFT" unit="ms" />
-              <LineChart data={history} metric="tps" color="#16a34a" label="TPS" unit="/s" />
+              <LineChart data={selectedHistory} metric="ttft_ms" color="#2563eb" label="TTFT" unit="ms" />
+              <LineChart data={selectedHistory} metric="tps" color="#16a34a" label="TPS" unit="/s" />
             </div>
           </div>
 
           <div className="panel">
             <PanelHeader icon={<CheckCircle2 size={18} aria-hidden="true" />} title="可用性窗口" />
-            <UptimeStrip data={history} />
+            <UptimeStrip data={selectedHistory} />
             <dl className="compact-list">
               <div>
                 <dt>成功样本</dt>
-                <dd>{formatInteger(stats.ok_samples)}</dd>
+                <dd>{formatInteger(selectedStats.ok_samples)}</dd>
               </div>
               <div>
                 <dt>失败样本</dt>
-                <dd>{formatInteger(stats.failed_samples)}</dd>
+                <dd>{formatInteger(selectedStats.failed_samples)}</dd>
               </div>
               <div>
                 <dt>最后更新</dt>
@@ -174,15 +208,19 @@ function App() {
             <dl className="compact-list">
               <div>
                 <dt>模型</dt>
-                <dd>{config.model || '-'}</dd>
+                <dd>{selectedTarget?.config?.model || '-'}</dd>
               </div>
               <div>
                 <dt>API Host</dt>
-                <dd>{config.base_host || '-'}</dd>
+                <dd>{selectedTarget?.config?.base_host || '-'}</dd>
               </div>
               <div>
                 <dt>采样间隔</dt>
                 <dd>{formatDuration(config.interval_seconds)}</dd>
+              </div>
+              <div>
+                <dt>探测模式</dt>
+                <dd>{config.probe_mode || '-'}</dd>
               </div>
               <div>
                 <dt>历史存储</dt>
@@ -194,7 +232,7 @@ function App() {
 
         <section className="panel">
           <PanelHeader icon={<Clock3 size={18} aria-hidden="true" />} title="最近采样" />
-          <SampleTable rows={history.slice(-12).reverse()} />
+          <SampleTable rows={selectedHistory.slice(-12).reverse()} />
         </section>
       </main>
     </div>
@@ -210,9 +248,9 @@ function Notice({ tone, icon, text }) {
   );
 }
 
-function StatusBadge({ status, label }) {
+function StatusBadge({ status, label, compact = false }) {
   return (
-    <div className={`status-badge ${status}`}>
+    <div className={`status-badge ${status} ${compact ? 'compact' : ''}`}>
       <span className="status-dot" />
       <span>{label}</span>
     </div>
@@ -239,6 +277,52 @@ function PanelHeader({ icon, title }) {
         {icon}
         <h2>{title}</h2>
       </div>
+    </div>
+  );
+}
+
+function ModelOverview({ rows, selectedId, onSelect }) {
+  if (!rows.length) {
+    return <div className="empty-state">暂无模型配置</div>;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="overview-table">
+        <thead>
+          <tr>
+            <th>模型</th>
+            <th>状态</th>
+            <th>TTFT</th>
+            <th>TPS</th>
+            <th>Uptime</th>
+            <th>最近采样</th>
+            <th>错误</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const meta = getStatusMeta(row.status);
+            return (
+              <tr key={row.id} className={row.id === selectedId ? 'selected' : ''}>
+                <td>
+                  <button className="model-link" onClick={() => onSelect(row.id)}>
+                    {row.label}
+                  </button>
+                </td>
+                <td>
+                  <StatusBadge status={row.status} label={meta.label} compact />
+                </td>
+                <td>{formatMs(row.latest?.ttft_ms)}</td>
+                <td>{formatTps(row.latest?.tps)}</td>
+                <td>{formatPercent(row.summary?.uptime_pct)}</td>
+                <td>{row.latest?.started_at ? relativeTime(row.latest.started_at) : '-'}</td>
+                <td className="error-cell">{row.latest?.error || '-'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -349,6 +433,28 @@ function SampleTable({ rows }) {
   );
 }
 
+function normalizeTargets(summary) {
+  if (!summary) {
+    return [];
+  }
+
+  if (Array.isArray(summary.targets)) {
+    return summary.targets;
+  }
+
+  return [
+    {
+      id: 'default',
+      label: summary.config?.model || 'default',
+      status: summary.status || 'unknown',
+      config: summary.config || {},
+      latest: summary.latest || null,
+      summary: summary.summary || {},
+      history: summary.history || [],
+    },
+  ];
+}
+
 function getStatusMeta(status) {
   const map = {
     up: { label: '正常', tone: 'good' },
@@ -398,49 +504,81 @@ function relativeTime(value) {
 
 function createMockSummary() {
   const now = Date.now();
-  const history = Array.from({ length: 72 }, (_, index) => {
-    const ok = index % 19 !== 0;
-    const ttft = ok ? 650 + Math.sin(index / 4) * 160 + (index % 7) * 24 : null;
-    const tps = ok ? 28 + Math.cos(index / 5) * 4 - (index % 6) * 0.35 : null;
+  const modelNames = ['deepseek-v4-pro', 'gpt-4o-mini', 'qwen-plus'];
+  const targets = modelNames.map((model, modelIndex) => {
+    const history = Array.from({ length: 72 }, (_, index) => {
+      const ok = (index + modelIndex) % 19 !== 0;
+      const ttft = ok ? 620 + modelIndex * 210 + Math.sin(index / 4) * 160 + (index % 7) * 24 : null;
+      const tps = ok ? 30 - modelIndex * 4 + Math.cos(index / 5) * 4 - (index % 6) * 0.35 : null;
+      return {
+        id: `mock-${modelIndex}-${index}`,
+        target_id: model,
+        target_label: model,
+        ok,
+        status: ok ? 'up' : 'down',
+        started_at: new Date(now - (72 - index) * 60_000).toISOString(),
+        ended_at: new Date(now - (72 - index) * 60_000 + 1800).toISOString(),
+        model,
+        base_host: 'api.example.com',
+        ttft_ms: ttft,
+        tps,
+        output_tokens: ok ? 72 + (index % 11) : null,
+        total_duration_ms: ok ? 2400 + (index % 9) * 110 : null,
+        error: ok ? null : 'mock upstream timeout',
+      };
+    });
+    const latest = history.at(-1);
+    const stats = summarizeMock(history);
+
     return {
-      id: `mock-${index}`,
-      ok,
-      status: ok ? 'up' : 'down',
-      started_at: new Date(now - (72 - index) * 60_000).toISOString(),
-      ended_at: new Date(now - (72 - index) * 60_000 + 1800).toISOString(),
-      ttft_ms: ttft,
-      tps,
-      output_tokens: ok ? 72 + (index % 11) : null,
-      total_duration_ms: ok ? 2400 + (index % 9) * 110 : null,
-      error: ok ? null : 'mock upstream timeout',
+      id: model,
+      label: model,
+      status: latest.ok ? 'up' : 'down',
+      config: {
+        id: model,
+        label: model,
+        configured: true,
+        model,
+        base_host: 'api.example.com',
+        api_path: '/chat/completions',
+        timeout_ms: 30000,
+        max_tokens: 80,
+      },
+      latest,
+      summary: stats,
+      history,
     };
   });
 
-  const latest = history.at(-1);
-  const okSamples = history.filter((sample) => sample.ok);
-
   return {
     generated_at: new Date().toISOString(),
-    status: 'up',
+    status: 'degraded',
     config: {
       configured: true,
-      model: 'demo-model',
-      base_host: 'api.example.com',
+      target_count: targets.length,
+      models: modelNames,
       interval_seconds: 60,
+      probe_mode: 'parallel',
     },
     storage: { type: 'local-demo', available: true },
-    latest,
-    summary: {
-      window_hours: 24,
-      total_samples: history.length,
-      ok_samples: okSamples.length,
-      failed_samples: history.length - okSamples.length,
-      uptime_pct: (okSamples.length / history.length) * 100,
-      ttft_p50_ms: percentile(okSamples.map((sample) => sample.ttft_ms), 0.5),
-      ttft_p95_ms: percentile(okSamples.map((sample) => sample.ttft_ms), 0.95),
-      tps_p50: percentile(okSamples.map((sample) => sample.tps), 0.5),
-    },
-    history,
+    targets,
+    latest: targets[0].latest,
+    summary: targets[0].summary,
+    history: targets[0].history,
+  };
+}
+
+function summarizeMock(history) {
+  const okSamples = history.filter((sample) => sample.ok);
+  return {
+    window_hours: 24,
+    total_samples: history.length,
+    ok_samples: okSamples.length,
+    failed_samples: history.length - okSamples.length,
+    uptime_pct: (okSamples.length / history.length) * 100,
+    ttft_p50_ms: percentile(okSamples.map((sample) => sample.ttft_ms), 0.5),
+    ttft_p95_ms: percentile(okSamples.map((sample) => sample.ttft_ms), 0.95),
+    tps_p50: percentile(okSamples.map((sample) => sample.tps), 0.5),
   };
 }
 

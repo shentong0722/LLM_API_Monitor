@@ -1,5 +1,7 @@
-const HISTORY_KEY = 'llm-monitor:history:v1';
-const LATEST_KEY = 'llm-monitor:latest:v1';
+const HISTORY_KEY = 'llm-monitor:history:v2';
+const LATEST_KEY = 'llm-monitor:latest:v2';
+const LEGACY_HISTORY_KEY = 'llm-monitor:history:v1';
+const LEGACY_LATEST_KEY = 'llm-monitor:latest:v1';
 const DEFAULT_PROMPT = 'Reply with one short sentence about API latency monitoring.';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -47,21 +49,24 @@ export default async function onRequest(context) {
 async function handleSummary(context) {
   const config = readConfig(context.env || {});
   const store = getStore(context);
-  const history = await readHistory(store);
-  const latest = (await readLatest(store)) || history.at(-1) || null;
-  const summary = summarizeHistory(history, config);
+  const history = await readHistory(store, config);
+  const latestMap = await readLatestMap(store, config);
+  const targets = buildTargetSummaries(config, history, latestMap);
+  const firstTarget = targets[0] || null;
 
   return json({
     generated_at: new Date().toISOString(),
-    status: computeOverallStatus(latest, config),
+    status: computeFleetStatus(targets),
     config: publicConfig(config),
     storage: {
       available: store.available,
       type: store.type,
     },
-    latest,
-    summary,
-    history,
+    targets,
+    fleet_summary: summarizeHistory(history, config),
+    latest: firstTarget?.latest || null,
+    summary: firstTarget?.summary || summarizeHistory([], config),
+    history: firstTarget?.history || [],
   });
 }
 
@@ -81,65 +86,101 @@ async function handleProbe(context) {
 
   const store = getStore(context);
   const force = url.searchParams.get('force') === '1';
-  const latest = await readLatest(store);
-  const minAgeMs = Math.max(0, config.intervalSeconds * 1000 * 0.8);
+  const requestedTarget = url.searchParams.get('target');
+  const selectedTargets = filterTargets(config.targets, requestedTarget);
 
-  if (!force && latest?.started_at && Date.now() - Date.parse(latest.started_at) < minAgeMs) {
+  if (!selectedTargets.length) {
+    return json({ error: 'No matching probe target' }, 404);
+  }
+
+  const latestMap = await readLatestMap(store, config);
+  const minAgeMs = Math.max(0, config.intervalSeconds * 1000 * 0.8);
+  const dueTargets = force
+    ? selectedTargets
+    : selectedTargets.filter((target) => {
+        const latest = latestMap[target.id];
+        return !latest?.started_at || Date.now() - Date.parse(latest.started_at) >= minAgeMs;
+      });
+
+  if (!dueTargets.length) {
+    const history = await readHistory(store, config);
+    const targets = buildTargetSummaries(config, history, latestMap);
+
     return json({
       skipped: true,
       reason: 'Probe interval has not elapsed',
-      sample: latest,
-      summary: summarizeHistory(await readHistory(store), config),
+      samples: selectedTargets.map((target) => latestMap[target.id]).filter(Boolean),
+      sample: latestMap[selectedTargets[0].id] || null,
+      targets,
+      summary: summarizeHistory(history, config),
     });
   }
 
-  const sample = await runProbe(config, context);
-  const history = await appendSample(store, sample, config.historyLimit);
+  const samples = await runProbeBatch(dueTargets, config, context);
+  const history = await appendSamples(store, samples, config);
+  const nextLatestMap = await readLatestMap(store, config);
+  const targets = buildTargetSummaries(config, history, nextLatestMap);
 
   return json({
     skipped: false,
-    sample,
+    mode: config.probeMode,
+    probed_targets: dueTargets.map((target) => target.id),
+    samples,
+    sample: samples[0] || null,
+    targets,
     summary: summarizeHistory(history, config),
   });
 }
 
-async function runProbe(config, context) {
+async function runProbeBatch(targets, config, context) {
+  if (config.probeMode === 'stagger' && config.probeStaggerMs > 0) {
+    const jobs = targets.map(async (target, index) => {
+      await sleep(index * config.probeStaggerMs);
+      return runProbe(target, context);
+    });
+
+    return Promise.all(jobs);
+  }
+
+  return Promise.all(targets.map((target) => runProbe(target, context)));
+}
+
+async function runProbe(target, context) {
   const id = createId();
   const startedAt = new Date().toISOString();
   const startedMs = nowMs();
-  const endpoint = buildEndpoint(config.baseUrl, config.apiPath);
+  const endpoint = buildEndpoint(target.baseUrl, target.apiPath);
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort('timeout'), config.timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort('timeout'), target.timeoutMs);
 
   let httpStatus = null;
   let firstTokenMs = null;
-  let lastTokenMs = null;
   let responseHeaderMs = null;
   let outputText = '';
   let chunkCount = 0;
   let usageCompletionTokens = null;
 
   try {
-    if (!config.apiKey) {
-      throw new Error('LLM_API_KEY or OPENAI_API_KEY is not configured');
+    if (!target.apiKey) {
+      throw new Error(`API key for target ${target.label} is not configured`);
     }
 
     const body = {
-      model: config.model,
-      messages: [{ role: 'user', content: config.prompt }],
+      model: target.model,
+      messages: [{ role: 'user', content: target.prompt }],
       temperature: 0,
       stream: true,
-      max_tokens: config.maxTokens,
+      max_tokens: target.maxTokens,
     };
 
-    if (config.includeStreamUsage) {
+    if (target.includeStreamUsage) {
       body.stream_options = { include_usage: true };
     }
 
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${target.apiKey}`,
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
       },
@@ -193,7 +234,6 @@ async function runProbe(config, context) {
         if (deltaText) {
           const tokenTimeMs = nowMs();
           firstTokenMs = firstTokenMs ?? tokenTimeMs;
-          lastTokenMs = tokenTimeMs;
           outputText += deltaText;
           chunkCount += 1;
         }
@@ -215,7 +255,6 @@ async function runProbe(config, context) {
     }
 
     const endedMs = nowMs();
-    const endedAt = new Date().toISOString();
     const outputTokens = Number.isFinite(usageCompletionTokens)
       ? usageCompletionTokens
       : estimateTokenCount(outputText, chunkCount);
@@ -224,12 +263,14 @@ async function runProbe(config, context) {
 
     return sanitizeSample({
       id,
+      target_id: target.id,
+      target_label: target.label,
       ok: true,
       status: 'up',
       started_at: startedAt,
-      ended_at: endedAt,
-      model: config.model,
-      base_host: safeHostname(config.baseUrl),
+      ended_at: new Date().toISOString(),
+      model: target.model,
+      base_host: safeHostname(target.baseUrl),
       region: context.server?.region || context.geo?.country || null,
       http_status: httpStatus,
       response_header_ms: round(responseHeaderMs, 2),
@@ -245,12 +286,14 @@ async function runProbe(config, context) {
     const endedMs = nowMs();
     return sanitizeSample({
       id,
+      target_id: target.id,
+      target_label: target.label,
       ok: false,
       status: 'down',
       started_at: startedAt,
       ended_at: new Date().toISOString(),
-      model: config.model,
-      base_host: safeHostname(config.baseUrl),
+      model: target.model,
+      base_host: safeHostname(target.baseUrl),
       region: context.server?.region || context.geo?.country || null,
       http_status: httpStatus,
       response_header_ms: Number.isFinite(responseHeaderMs) ? round(responseHeaderMs, 2) : null,
@@ -268,35 +311,124 @@ async function runProbe(config, context) {
 }
 
 function readConfig(env) {
-  return {
+  const base = {
     apiKey: env.LLM_API_KEY || env.OPENAI_API_KEY || '',
     baseUrl: normalizeBaseUrl(env.LLM_API_BASE_URL || env.OPENAI_BASE_URL || DEFAULT_BASE_URL),
     apiPath: env.LLM_API_PATH || '/chat/completions',
     model: env.LLM_MODEL || env.OPENAI_MODEL || DEFAULT_MODEL,
     prompt: env.LLM_PROMPT || DEFAULT_PROMPT,
     maxTokens: toInteger(env.LLM_MAX_TOKENS, DEFAULT_MAX_TOKENS, 1, 4096),
-    intervalSeconds: toInteger(env.LLM_PROBE_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS, 10, 3600),
     timeoutMs: toInteger(env.LLM_PROBE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 120000),
-    historyLimit: toInteger(env.LLM_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT, 10, 5000),
-    windowHours: toInteger(env.LLM_UPTIME_WINDOW_HOURS, DEFAULT_WINDOW_HOURS, 1, 168),
-    cronSecret: env.PROBE_CRON_SECRET || '',
     includeStreamUsage: env.LLM_STREAM_OPTIONS_INCLUDE_USAGE !== 'false',
     ttftDegradedMs: toInteger(env.LLM_TTFT_DEGRADED_MS, 3000, 100, 600000),
     tpsDegradedBelow: toNumber(env.LLM_TPS_DEGRADED_BELOW, 5, 0, 1000),
   };
+
+  const config = {
+    ...base,
+    intervalSeconds: toInteger(env.LLM_PROBE_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS, 10, 3600),
+    historyLimit: toInteger(env.LLM_HISTORY_LIMIT, DEFAULT_HISTORY_LIMIT, 10, 5000),
+    windowHours: toInteger(env.LLM_UPTIME_WINDOW_HOURS, DEFAULT_WINDOW_HOURS, 1, 168),
+    cronSecret: env.PROBE_CRON_SECRET || '',
+    probeMode: env.LLM_PROBE_MODE === 'stagger' ? 'stagger' : 'parallel',
+    probeStaggerMs: toInteger(env.LLM_PROBE_STAGGER_MS, 0, 0, 60000),
+  };
+
+  config.targets = readTargets(env, base);
+  return config;
+}
+
+function readTargets(env, base) {
+  const parsedTargets = safeJsonParse(env.LLM_TARGETS);
+
+  if (Array.isArray(parsedTargets) && parsedTargets.length) {
+    return normalizeTargets(
+      parsedTargets.map((target, index) => ({
+        id: target.id,
+        label: target.label || target.name,
+        apiKey: target.api_key || target.apiKey || base.apiKey,
+        baseUrl: target.base_url || target.baseUrl || target.api_base_url || base.baseUrl,
+        apiPath: target.api_path || target.apiPath || base.apiPath,
+        model: target.model || base.model,
+        prompt: target.prompt || base.prompt,
+        maxTokens: target.max_tokens || target.maxTokens || base.maxTokens,
+        timeoutMs: target.timeout_ms || target.timeoutMs || base.timeoutMs,
+        includeStreamUsage:
+          target.include_stream_usage ?? target.includeStreamUsage ?? base.includeStreamUsage,
+        ttftDegradedMs: target.ttft_degraded_ms || target.ttftDegradedMs || base.ttftDegradedMs,
+        tpsDegradedBelow: target.tps_degraded_below || target.tpsDegradedBelow || base.tpsDegradedBelow,
+        index,
+      })),
+    );
+  }
+
+  const modelList = splitList(env.LLM_MODELS || env.LLM_MODEL || env.OPENAI_MODEL || DEFAULT_MODEL);
+
+  return normalizeTargets(
+    modelList.map((model, index) => ({
+      ...base,
+      id: model,
+      label: model,
+      model,
+      index,
+    })),
+  );
+}
+
+function normalizeTargets(targets) {
+  const usedIds = new Map();
+
+  return targets.map((target, index) => {
+    const model = String(target.model || DEFAULT_MODEL).trim();
+    const baseId = slugify(target.id || model || `target-${index + 1}`);
+    const usedCount = usedIds.get(baseId) || 0;
+    usedIds.set(baseId, usedCount + 1);
+    const id = usedCount ? `${baseId}-${usedCount + 1}` : baseId;
+
+    return {
+      id,
+      label: String(target.label || model || id).trim(),
+      apiKey: String(target.apiKey || ''),
+      baseUrl: normalizeBaseUrl(target.baseUrl || DEFAULT_BASE_URL),
+      apiPath: target.apiPath || '/chat/completions',
+      model,
+      prompt: String(target.prompt || DEFAULT_PROMPT),
+      maxTokens: toInteger(target.maxTokens, DEFAULT_MAX_TOKENS, 1, 4096),
+      timeoutMs: toInteger(target.timeoutMs, DEFAULT_TIMEOUT_MS, 1000, 120000),
+      includeStreamUsage: target.includeStreamUsage !== false,
+      ttftDegradedMs: toInteger(target.ttftDegradedMs, 3000, 100, 600000),
+      tpsDegradedBelow: toNumber(target.tpsDegradedBelow, 5, 0, 1000),
+    };
+  });
 }
 
 function publicConfig(config) {
   return {
-    configured: Boolean(config.apiKey && config.model && config.baseUrl),
-    model: config.model,
-    base_host: safeHostname(config.baseUrl),
-    api_path: config.apiPath,
+    configured: config.targets.length > 0 && config.targets.every((target) => target.apiKey && target.model && target.baseUrl),
+    target_count: config.targets.length,
+    models: config.targets.map((target) => target.model),
+    base_host: config.targets.length === 1 ? safeHostname(config.targets[0].baseUrl) : 'multiple',
+    api_path: config.targets.length === 1 ? config.targets[0].apiPath : 'multiple',
     interval_seconds: config.intervalSeconds,
     timeout_ms: config.timeoutMs,
     max_tokens: config.maxTokens,
     window_hours: config.windowHours,
+    probe_mode: config.probeMode,
     prompt_preview: truncate(config.prompt, 120),
+  };
+}
+
+function publicTargetConfig(target) {
+  return {
+    id: target.id,
+    label: target.label,
+    configured: Boolean(target.apiKey && target.model && target.baseUrl),
+    model: target.model,
+    base_host: safeHostname(target.baseUrl),
+    api_path: target.apiPath,
+    timeout_ms: target.timeoutMs,
+    max_tokens: target.maxTokens,
+    prompt_preview: truncate(target.prompt, 120),
   };
 }
 
@@ -327,26 +459,94 @@ function getStore(context) {
   };
 }
 
-async function readLatest(store) {
+async function readLatestMap(store, config) {
   const raw = await store.get(LATEST_KEY);
   const parsed = safeJsonParse(raw);
-  return parsed && typeof parsed === 'object' ? parsed : null;
+
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !parsed.started_at) {
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([targetId, sample]) => [targetId, sanitizeSample(sample)])
+        .filter(([, sample]) => sample),
+    );
+  }
+
+  if (parsed?.started_at) {
+    const sample = sanitizeSample(parsed);
+    return sample ? { [sample.target_id || config.targets[0]?.id || 'default']: sample } : {};
+  }
+
+  const legacy = safeJsonParse(await store.get(LEGACY_LATEST_KEY));
+  const legacySample = sanitizeSample(legacy);
+
+  if (!legacySample || !config.targets[0]) {
+    return {};
+  }
+
+  legacySample.target_id = config.targets[0].id;
+  legacySample.target_label = config.targets[0].label;
+  return { [config.targets[0].id]: legacySample };
 }
 
-async function readHistory(store) {
+async function readHistory(store, config) {
   const raw = await store.get(HISTORY_KEY);
   const parsed = safeJsonParse(raw);
-  return Array.isArray(parsed) ? parsed.map(sanitizeSample).filter(Boolean) : [];
+
+  if (Array.isArray(parsed)) {
+    return parsed.map(sanitizeSample).filter(Boolean);
+  }
+
+  const legacyRaw = await store.get(LEGACY_HISTORY_KEY);
+  const legacyParsed = safeJsonParse(legacyRaw);
+
+  if (!Array.isArray(legacyParsed) || !config.targets[0]) {
+    return [];
+  }
+
+  return legacyParsed
+    .map((sample) =>
+      sanitizeSample({
+        ...sample,
+        target_id: sample.target_id || config.targets[0].id,
+        target_label: sample.target_label || config.targets[0].label,
+      }),
+    )
+    .filter(Boolean);
 }
 
-async function appendSample(store, sample, historyLimit) {
-  const history = await readHistory(store);
-  const nextHistory = [...history, sample].slice(-historyLimit);
+async function appendSamples(store, samples, config) {
+  const history = await readHistory(store, config);
+  const usableSamples = samples.map(sanitizeSample).filter(Boolean);
+  const limit = Math.max(config.historyLimit * Math.max(config.targets.length, 1), config.targets.length);
+  const nextHistory = [...history, ...usableSamples].slice(-limit);
+  const latestMap = await readLatestMap(store, config);
+
+  for (const sample of usableSamples) {
+    latestMap[sample.target_id] = sample;
+  }
 
   await store.put(HISTORY_KEY, JSON.stringify(nextHistory));
-  await store.put(LATEST_KEY, JSON.stringify(sample));
+  await store.put(LATEST_KEY, JSON.stringify(latestMap));
 
   return nextHistory;
+}
+
+function buildTargetSummaries(config, history, latestMap) {
+  return config.targets.map((target) => {
+    const targetHistory = history.filter((sample) => sample.target_id === target.id);
+    const latest = latestMap[target.id] || targetHistory.at(-1) || null;
+    const status = computeTargetStatus(latest, target, config);
+
+    return {
+      id: target.id,
+      label: target.label,
+      status,
+      config: publicTargetConfig(target),
+      latest,
+      summary: summarizeHistory(targetHistory, config),
+      history: targetHistory,
+    };
+  });
 }
 
 function summarizeHistory(history, config) {
@@ -372,7 +572,33 @@ function summarizeHistory(history, config) {
   };
 }
 
-function computeOverallStatus(latest, config) {
+function computeFleetStatus(targets) {
+  if (!targets.length) {
+    return 'unknown';
+  }
+
+  const statuses = targets.map((target) => target.status);
+
+  if (statuses.every((status) => status === 'unknown')) {
+    return 'unknown';
+  }
+
+  if (statuses.every((status) => status === 'down')) {
+    return 'down';
+  }
+
+  if (statuses.includes('down') || statuses.includes('degraded')) {
+    return 'degraded';
+  }
+
+  if (statuses.includes('stale')) {
+    return 'stale';
+  }
+
+  return 'up';
+}
+
+function computeTargetStatus(latest, target, config) {
   if (!latest) {
     return 'unknown';
   }
@@ -391,12 +617,27 @@ function computeOverallStatus(latest, config) {
   if (
     Number.isFinite(latest.ttft_ms) &&
     Number.isFinite(latest.tps) &&
-    (latest.ttft_ms > config.ttftDegradedMs || latest.tps < config.tpsDegradedBelow)
+    (latest.ttft_ms > target.ttftDegradedMs || latest.tps < target.tpsDegradedBelow)
   ) {
     return 'degraded';
   }
 
   return 'up';
+}
+
+function filterTargets(targets, requestedTarget) {
+  if (!requestedTarget) {
+    return targets;
+  }
+
+  const normalized = slugify(requestedTarget);
+  return targets.filter(
+    (target) =>
+      target.id === requestedTarget ||
+      target.model === requestedTarget ||
+      target.label === requestedTarget ||
+      target.id === normalized,
+  );
 }
 
 function isAuthorized(request, url, config) {
@@ -416,13 +657,7 @@ function extractDeltaText(parsed) {
   const choice = parsed?.choices?.[0];
   const delta = choice?.delta || {};
 
-  return (
-    delta.content ||
-    delta.reasoning_content ||
-    choice?.text ||
-    parsed?.output_text ||
-    ''
-  );
+  return delta.content || delta.reasoning_content || choice?.text || parsed?.output_text || '';
 }
 
 function parseSseLine(line) {
@@ -454,6 +689,8 @@ function sanitizeSample(sample) {
 
   return {
     id: sample.id || createId(),
+    target_id: sample.target_id || slugify(sample.model || 'default'),
+    target_label: sample.target_label || sample.model || 'default',
     ok: Boolean(sample.ok),
     status: sample.ok ? 'up' : 'down',
     started_at: sample.started_at,
@@ -530,6 +767,23 @@ function truncate(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function slugify(value) {
+  const slug = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return slug || 'default';
+}
+
 function toInteger(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
 
@@ -587,6 +841,10 @@ function round(value, precision = 2) {
 
   const factor = 10 ** precision;
   return Math.round(value * factor) / factor;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function nowMs() {

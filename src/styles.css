@@ -209,6 +209,13 @@ h1 {
   background: #f8fafc;
 }
 
+.status-badge.compact {
+  display: inline-flex;
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -289,6 +296,10 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.content > .panel {
+  margin-top: 14px;
+}
+
 .wide-panel {
   grid-row: span 2;
 }
@@ -316,6 +327,55 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.target-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.target-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #d8e0eb;
+  border-radius: 8px;
+  color: #334155;
+  background: #ffffff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.target-tab:hover,
+.target-tab.active {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.mini-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.mini-dot.up {
+  background: var(--green);
+}
+
+.mini-dot.degraded,
+.mini-dot.stale {
+  background: var(--amber);
+}
+
+.mini-dot.down {
+  background: var(--red);
 }
 
 .chart-card {
@@ -445,6 +505,28 @@ th {
 
 td {
   color: #273345;
+}
+
+.overview-table tr.selected td {
+  background: #eff6ff;
+}
+
+.model-link {
+  max-width: 280px;
+  padding: 0;
+  border: 0;
+  color: #1d4ed8;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 760;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-link:hover {
+  text-decoration: underline;
 }
 
 .table-status {
