@@ -1,7 +1,7 @@
-const HISTORY_KEY = 'llm-monitor:history:v2';
-const LATEST_KEY = 'llm-monitor:latest:v2';
-const LEGACY_HISTORY_KEY = 'llm-monitor:history:v1';
-const LEGACY_LATEST_KEY = 'llm-monitor:latest:v1';
+const HISTORY_KEY = 'llm_monitor_history_v2';
+const LATEST_KEY = 'llm_monitor_latest_v2';
+const LEGACY_HISTORY_KEY = 'llm_monitor_history_v1';
+const LEGACY_LATEST_KEY = 'llm_monitor_latest_v1';
 const DEFAULT_PROMPT = 'Reply with one short sentence about API latency monitoring.';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -508,7 +508,7 @@ function getGlobalKvCandidates() {
 }
 
 async function readLatestMap(store, config) {
-  const raw = await store.get(LATEST_KEY);
+  const raw = await safeStoreGet(store, LATEST_KEY);
   const parsed = safeJsonParse(raw);
 
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && !parsed.started_at) {
@@ -524,7 +524,7 @@ async function readLatestMap(store, config) {
     return sample ? { [sample.target_id || config.targets[0]?.id || 'default']: sample } : {};
   }
 
-  const legacy = safeJsonParse(await store.get(LEGACY_LATEST_KEY));
+  const legacy = safeJsonParse(await safeStoreGet(store, LEGACY_LATEST_KEY));
   const legacySample = sanitizeSample(legacy);
 
   if (!legacySample || !config.targets[0]) {
@@ -537,14 +537,14 @@ async function readLatestMap(store, config) {
 }
 
 async function readHistory(store, config) {
-  const raw = await store.get(HISTORY_KEY);
+  const raw = await safeStoreGet(store, HISTORY_KEY);
   const parsed = safeJsonParse(raw);
 
   if (Array.isArray(parsed)) {
     return parsed.map(sanitizeSample).filter(Boolean);
   }
 
-  const legacyRaw = await store.get(LEGACY_HISTORY_KEY);
+  const legacyRaw = await safeStoreGet(store, LEGACY_HISTORY_KEY);
   const legacyParsed = safeJsonParse(legacyRaw);
 
   if (!Array.isArray(legacyParsed) || !config.targets[0]) {
@@ -573,10 +573,38 @@ async function appendSamples(store, samples, config) {
     latestMap[sample.target_id] = sample;
   }
 
-  await store.put(HISTORY_KEY, JSON.stringify(nextHistory));
-  await store.put(LATEST_KEY, JSON.stringify(latestMap));
+  await safeStorePut(store, HISTORY_KEY, JSON.stringify(nextHistory));
+  await safeStorePut(store, LATEST_KEY, JSON.stringify(latestMap));
 
   return nextHistory;
+}
+
+async function safeStoreGet(store, key) {
+  try {
+    return await store.get(key);
+  } catch (error) {
+    if (isKvKeyValidationError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function safeStorePut(store, key, value) {
+  try {
+    await store.put(key, value);
+  } catch (error) {
+    if (isKvKeyValidationError(error)) {
+      throw new Error(`KV key "${key}" is invalid for the current EdgeOne KV namespace`);
+    }
+
+    throw error;
+  }
+}
+
+function isKvKeyValidationError(error) {
+  return /key can only contain letters, numbers, and underscores/i.test(error?.message || String(error));
 }
 
 function buildTargetSummaries(config, history, latestMap) {
