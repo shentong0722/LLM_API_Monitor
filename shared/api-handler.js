@@ -210,6 +210,7 @@ async function runProbe(target, context) {
     const decoder = new TextDecoder();
     let buffer = '';
     let streamDone = false;
+    let streamReadError = null;
 
     const ingestPayload = (payload) => {
       if (!payload) {
@@ -244,7 +245,16 @@ async function runProbe(target, context) {
     };
 
     while (true) {
-      const { value, done } = await reader.read();
+      let readResult;
+
+      try {
+        readResult = await reader.read();
+      } catch (error) {
+        streamReadError = error;
+        break;
+      }
+
+      const { value, done } = readResult;
 
       if (done) {
         break;
@@ -266,6 +276,10 @@ async function runProbe(target, context) {
         }
         break;
       }
+    }
+
+    if (streamReadError && (!firstTokenMs || !isTolerableStreamEndError(streamReadError))) {
+      throw streamReadError;
     }
 
     if (!streamDone) {
@@ -307,7 +321,11 @@ async function runProbe(target, context) {
       ttft_ms: round(firstTokenMs - startedMs, 2),
       tps: round(tps, 3),
       output_tokens: outputTokens,
-      token_count_source: Number.isFinite(usageCompletionTokens) ? 'usage' : 'estimate',
+      token_count_source: Number.isFinite(usageCompletionTokens)
+        ? 'usage'
+        : streamReadError
+          ? 'estimate_stream_terminated'
+          : 'estimate',
       stream_chunks: chunkCount,
       total_duration_ms: round(endedMs - startedMs, 2),
       error: null,
@@ -1062,6 +1080,19 @@ function sanitizeError(error) {
   }
 
   return truncate(error?.message || String(error), 500);
+}
+
+function isTolerableStreamEndError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  const code = String(error?.code || error?.cause?.code || '').toLowerCase();
+
+  return (
+    message === 'terminated' ||
+    message.includes('premature close') ||
+    message.includes('response body was aborted') ||
+    code === 'und_err_socket' ||
+    code === 'und_err_body_timeout'
+  );
 }
 
 function formatUpstreamHttpError(status, bodyText) {
