@@ -293,8 +293,8 @@ function ModelOverview({ rows, selectedId, onSelect }) {
           <tr>
             <th>模型</th>
             <th>状态</th>
-            <th>TTFT</th>
-            <th>TPS</th>
+            <th>1h TTFT</th>
+            <th>1h TPS</th>
             <th>Uptime</th>
             <th>最近采样</th>
             <th>错误</th>
@@ -313,9 +313,9 @@ function ModelOverview({ rows, selectedId, onSelect }) {
                 <td>
                   <StatusBadge status={row.status} label={meta.label} compact />
                 </td>
-                <td>{formatMs(row.latest?.ttft_ms)}</td>
-                <td>{formatTps(row.latest?.tps)}</td>
-                <td>{formatPercent(row.summary?.uptime_pct)}</td>
+                <td>{formatMs(row.one_hour_summary?.ttft_avg_ms)}</td>
+                <td>{formatTps(row.one_hour_summary?.tps_avg)}</td>
+                <td>{formatPercent(row.one_hour_summary?.uptime_pct)}</td>
                 <td>{row.latest?.started_at ? relativeTime(row.latest.started_at) : '-'}</td>
                 <td className="error-cell">{row.latest?.error || '-'}</td>
               </tr>
@@ -546,6 +546,7 @@ function createMockSummary() {
       },
       latest,
       summary: stats,
+      one_hour_summary: stats,
       history,
     };
   });

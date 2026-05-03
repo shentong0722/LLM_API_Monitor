@@ -64,6 +64,7 @@ async function handleSummary(context) {
     },
     targets,
     fleet_summary: summarizeHistory(history, config),
+    fleet_one_hour_summary: summarizeHistory(history, config, 1),
     latest: firstTarget?.latest || null,
     summary: firstTarget?.summary || summarizeHistory([], config),
     history: firstTarget?.history || [],
@@ -568,13 +569,14 @@ function buildTargetSummaries(config, history, latestMap) {
       config: publicTargetConfig(target),
       latest,
       summary: summarizeHistory(targetHistory, config),
+      one_hour_summary: summarizeHistory(targetHistory, config, 1),
       history: targetHistory,
     };
   });
 }
 
-function summarizeHistory(history, config) {
-  const cutoff = Date.now() - config.windowHours * 60 * 60 * 1000;
+function summarizeHistory(history, config, windowHours = config.windowHours) {
+  const cutoff = Date.now() - windowHours * 60 * 60 * 1000;
   const windowed = history.filter((sample) => Date.parse(sample.started_at) >= cutoff);
   const okSamples = windowed.filter((sample) => sample.ok);
   const failedSamples = windowed.length - okSamples.length;
@@ -582,7 +584,7 @@ function summarizeHistory(history, config) {
   const tpsValues = okSamples.map((sample) => sample.tps).filter(Number.isFinite);
 
   return {
-    window_hours: config.windowHours,
+    window_hours: windowHours,
     total_samples: windowed.length,
     ok_samples: okSamples.length,
     failed_samples: failedSamples,

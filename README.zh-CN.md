@@ -121,6 +121,8 @@ curl -fsS "https://your-domain/api/probe?token=PROBE_CRON_SECRET&target=deepseek
    - `npm run build` 会把 `cloud-functions/` 和 `shared/` 同步到 `dist/`，用于兼容只发布输出目录的构建流程。
 4. 在项目环境变量中配置 `LLM_API_BASE_URL`、`LLM_API_KEY`、`LLM_MODELS` 或 `LLM_TARGETS`、`PROBE_CRON_SECRET` 等变量。
 5. 开通 Pages KV，创建 Namespace，并在项目里绑定 KV，变量名填写 `LLM_MONITOR_KV`。
+   - KV 绑定不是普通文本环境变量，不需要再新增一个同名环境变量。
+   - 绑定或修改 KV 后需要重新部署；线上是否真正生效以 `/api/summary` 返回的 `storage.type` 为准，正常应为 `edgeone-kv`。
 6. 部署项目。部署后确认：
    - `https://your-domain/api/health`
    - `https://your-domain/api/summary`
