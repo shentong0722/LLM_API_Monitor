@@ -203,9 +203,15 @@ async function runProbe(target, context) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamDone = false;
 
     const ingestPayload = (payload) => {
-      if (!payload || payload === '[DONE]') {
+      if (!payload) {
+        return;
+      }
+
+      if (payload === '[DONE]') {
+        streamDone = true;
         return;
       }
 
@@ -245,11 +251,22 @@ async function runProbe(target, context) {
       for (const payload of extracted.payloads) {
         ingestPayload(payload);
       }
+
+      if (streamDone) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The stream may already be closed by the upstream.
+        }
+        break;
+      }
     }
 
-    buffer += decoder.decode();
+    if (!streamDone) {
+      buffer += decoder.decode();
+    }
 
-    if (buffer.trim()) {
+    if (!streamDone && buffer.trim()) {
       const extracted = extractStreamPayloads(buffer, { flush: true });
 
       for (const payload of extracted.payloads) {
@@ -664,21 +681,22 @@ function extractDeltaText(parsed) {
   const choice = parsed?.choices?.[0];
   const delta = choice?.delta || {};
 
-  return toText(
-    delta.content ??
-      delta.reasoning_content ??
-      delta.reasoning ??
-      choice?.message?.content ??
-      choice?.message?.reasoning_content ??
-      choice?.text ??
-      parsed?.message?.content ??
-      parsed?.delta?.content ??
-      parsed?.response ??
-      parsed?.content ??
-      parsed?.output_text ??
-      parsed?.text ??
-      '',
-  );
+  return firstNonEmptyText([
+    delta.content,
+    delta.reasoning_content,
+    delta.reasoning,
+    choice?.message?.content,
+    choice?.message?.reasoning_content,
+    choice?.message?.reasoning,
+    choice?.text,
+    parsed?.message?.content,
+    parsed?.delta?.content,
+    parsed?.delta?.reasoning,
+    parsed?.response,
+    parsed?.content,
+    parsed?.output_text,
+    parsed?.text,
+  ]);
 }
 
 function extractCompletionTokens(parsed) {
@@ -761,6 +779,18 @@ function toText(value) {
         return item?.text || item?.content || item?.value || '';
       })
       .join('');
+  }
+
+  return '';
+}
+
+function firstNonEmptyText(values) {
+  for (const value of values) {
+    const text = toText(value);
+
+    if (text) {
+      return text;
+    }
   }
 
   return '';
