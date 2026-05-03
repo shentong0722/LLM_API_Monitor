@@ -11,7 +11,8 @@ LLM API Monitor is a public dashboard for measuring OpenAI-compatible streaming 
 - TTFT, TPS, uptime, recent history, and per-model details.
 - EdgeOne Pages deployment with Cloud Functions.
 - Optional persistent history via EdgeOne Pages KV.
-- Custom dashboard title, subtitle, and footer repository link.
+- Custom dashboard title and subtitle.
+- Fixed footer link to this open-source project: https://github.com/shentong0722/LLM_API_Monitor
 
 ## Project Structure
 
@@ -54,7 +55,13 @@ PROBE_CRON_SECRET=replace-with-a-long-random-token
 
 SITE_TITLE=LLM API Monitor
 SITE_SUBTITLE=OpenAI-compatible stream
-PROJECT_REPO_URL=https://github.com/shentong0722/LLM_API_Monitor
+```
+
+EdgeOne Pages may reject spaces in environment variable values. For display-only values, write `--` to render a space. A single `-` stays unchanged.
+
+```env
+SITE_TITLE=LLM--API--Monitor
+SITE_SUBTITLE=OpenAI-compatible--stream
 ```
 
 Advanced multi-upstream configuration:

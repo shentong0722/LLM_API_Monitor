@@ -43,7 +43,6 @@ edgeone pages dev
 | `LLM_TARGETS` | 高级可选 | JSON 数组，用于配置不同上游、不同 key 或不同 prompt 的多个目标 |
 | `SITE_TITLE` | 否 | 面板标题，默认 `LLM API Monitor` |
 | `SITE_SUBTITLE` | 否 | 面板副标题，默认 `OpenAI-compatible stream` |
-| `PROJECT_REPO_URL` | 否 | 页脚 GitHub 链接 |
 | `LLM_PROMPT` | 否 | 固定提示词 |
 | `LLM_MAX_TOKENS` | 否 | 单次探测输出上限，默认 `80` |
 | `LLM_PROBE_INTERVAL_SECONDS` | 否 | 采样间隔，默认 `60` |
@@ -74,6 +73,15 @@ LLM_TARGETS=[{"id":"chatst-v4","label":"ChatST v4","model":"deepseek-v4-pro","ba
 ```
 
 `LLM_TARGETS` 中可选字段包括：`id`、`label`、`model`、`base_url`、`api_key`、`api_path`、`prompt`、`max_tokens`、`timeout_ms`、`include_stream_usage`、`ttft_degraded_ms`、`tps_degraded_below`。
+
+EdgeOne Pages 如果不允许环境变量值包含空格，标题和副标题可以用 `--` 表示空格，单个 `-` 会原样保留：
+
+```env
+SITE_TITLE=LLM--API--Monitor
+SITE_SUBTITLE=OpenAI-compatible--stream
+```
+
+页脚 GitHub 链接固定为 `https://github.com/shentong0722/LLM_API_Monitor`，不提供环境变量修改。
 
 ## API
 

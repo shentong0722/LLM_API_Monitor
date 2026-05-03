@@ -17,6 +17,7 @@ import {
 import './styles.css';
 
 const POLL_INTERVAL_MS = 20_000;
+const PROJECT_REPO_URL = 'https://github.com/shentong0722/LLM_API_Monitor';
 
 function App() {
   const [summary, setSummary] = React.useState(null);
@@ -87,7 +88,6 @@ function App() {
   const config = summary?.config || {};
   const siteTitle = config.site_title || 'LLM API Monitor';
   const siteSubtitle = config.site_subtitle || 'OpenAI-compatible stream';
-  const projectRepoUrl = config.project_repo_url || 'https://github.com/shentong0722/LLM_API_Monitor';
   const availableTargets = targets.filter((target) => target.latest?.ok && target.status !== 'stale').length;
   const failedTargets = targets.filter((target) => target.status === 'down').length;
 
@@ -241,7 +241,7 @@ function App() {
 
       <footer className="footer">
         <span>{siteTitle}</span>
-        <a href={projectRepoUrl} target="_blank" rel="noreferrer">
+        <a href={PROJECT_REPO_URL} target="_blank" rel="noreferrer">
           GitHub
         </a>
       </footer>

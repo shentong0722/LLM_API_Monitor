@@ -360,9 +360,8 @@ function readConfig(env) {
     cronSecret: env.PROBE_CRON_SECRET || '',
     probeMode: env.LLM_PROBE_MODE === 'stagger' ? 'stagger' : 'parallel',
     probeStaggerMs: toInteger(env.LLM_PROBE_STAGGER_MS, 0, 0, 60000),
-    siteTitle: env.SITE_TITLE || env.PUBLIC_SITE_TITLE || DEFAULT_SITE_TITLE,
-    siteSubtitle: env.SITE_SUBTITLE || env.PUBLIC_SITE_SUBTITLE || DEFAULT_SITE_SUBTITLE,
-    projectRepoUrl: env.PROJECT_REPO_URL || env.PUBLIC_PROJECT_REPO_URL || DEFAULT_PROJECT_REPO_URL,
+    siteTitle: decodeDisplayEnv(env.SITE_TITLE || env.PUBLIC_SITE_TITLE || DEFAULT_SITE_TITLE),
+    siteSubtitle: decodeDisplayEnv(env.SITE_SUBTITLE || env.PUBLIC_SITE_SUBTITLE || DEFAULT_SITE_SUBTITLE),
   };
 
   config.targets = readTargets(env, base);
@@ -447,7 +446,7 @@ function publicConfig(config) {
     probe_mode: config.probeMode,
     site_title: config.siteTitle,
     site_subtitle: config.siteSubtitle,
-    project_repo_url: config.projectRepoUrl,
+    project_repo_url: DEFAULT_PROJECT_REPO_URL,
     prompt_preview: truncate(config.prompt, 120),
   };
 }
@@ -913,6 +912,10 @@ function sanitizeError(error) {
 function truncate(value, maxLength) {
   const text = String(value || '');
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function decodeDisplayEnv(value) {
+  return String(value || '').replace(/--/g, ' ');
 }
 
 function splitList(value) {
