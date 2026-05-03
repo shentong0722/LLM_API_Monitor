@@ -88,8 +88,8 @@ function App() {
   const config = summary?.config || {};
   const siteTitle = config.site_title || 'LLM API Monitor';
   const siteSubtitle = config.site_subtitle || 'OpenAI-compatible stream';
-  const availableTargets = targets.filter((target) => target.latest?.ok && target.status !== 'stale').length;
-  const failedTargets = targets.filter((target) => target.status === 'down').length;
+  const degradedTargets = targets.filter((target) => target.status === 'degraded').length;
+  const downTargets = targets.filter((target) => target.status === 'down').length;
 
   return (
     <div className="app-shell">
@@ -137,7 +137,7 @@ function App() {
             icon={<Wifi size={20} aria-hidden="true" />}
             label="全局状态"
             value={loading ? '加载中' : statusMeta.label}
-            detail={`${availableTargets}/${targets.length || 0} models available · ${failedTargets} failed`}
+            detail={`${degradedTargets} degraded · ${downTargets} failed · ${targets.length || 0} models`}
             tone={statusMeta.tone}
           />
           <MetricCard

@@ -47,21 +47,22 @@ Do not commit real secrets. Put production secrets in the EdgeOne Pages console.
 LLM_API_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=sk-REPLACE_ME
 LLM_MODELS=gpt-4o-mini,gpt-4.1-mini
-LLM_PROMPT=Reply with one short sentence about API latency monitoring.
+LLM_PROMPT=Reply_with_one_short_sentence_about_API_latency_monitoring.
 LLM_MAX_TOKENS=80
 LLM_PROBE_INTERVAL_SECONDS=60
 LLM_PROBE_TIMEOUT_MS=30000
 PROBE_CRON_SECRET=replace-with-a-long-random-token
 
-SITE_TITLE=LLM API Monitor
-SITE_SUBTITLE=OpenAI-compatible stream
+SITE_TITLE=LLM_API_Monitor
+SITE_SUBTITLE=OpenAI-compatible_stream
 ```
 
-EdgeOne Pages may reject spaces in environment variable values. For display-only values, write `--` to render a space. A single `-` stays unchanged.
+EdgeOne Pages may reject spaces in environment variable values. For `SITE_TITLE`, `SITE_SUBTITLE`, and `LLM_PROMPT`, write `_` to render a space. Other environment variables are not decoded this way.
 
 ```env
-SITE_TITLE=LLM--API--Monitor
-SITE_SUBTITLE=OpenAI-compatible--stream
+SITE_TITLE=LLM_API_Monitor
+SITE_SUBTITLE=OpenAI-compatible_stream
+LLM_PROMPT=Reply_with_one_short_sentence.
 ```
 
 Advanced multi-upstream configuration:
@@ -81,6 +82,10 @@ GET /api/probe?token=PROBE_CRON_SECRET&target=model-id&force=1
 ```
 
 `/api/summary` returns public dashboard data. `/api/probe` sends real upstream streaming requests and writes samples to KV when KV is available.
+
+## Status Rules
+
+The global status is based on the last one hour, not only the newest sample. A model is marked degraded or down only when more than 10% of its one-hour samples are degraded or failed. The top global card shows how many models are currently degraded or failed.
 
 ## EdgeOne Pages Deployment
 

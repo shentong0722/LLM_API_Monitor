@@ -62,7 +62,7 @@ edgeone pages dev
 LLM_API_BASE_URL=https://api.example.com/v1
 LLM_API_KEY=sk-REPLACE_ME
 LLM_MODELS=deepseek-v4-pro,deepseek-v3,deepseek-r1
-LLM_PROMPT=Reply with one short sentence about API latency monitoring.
+LLM_PROMPT=Reply_with_one_short_sentence_about_API_latency_monitoring.
 LLM_MAX_TOKENS=80
 ```
 
@@ -74,16 +74,21 @@ LLM_TARGETS=[{"id":"chatst-v4","label":"ChatST v4","model":"deepseek-v4-pro","ba
 
 `LLM_TARGETS` 中可选字段包括：`id`、`label`、`model`、`base_url`、`api_key`、`api_path`、`prompt`、`max_tokens`、`timeout_ms`、`include_stream_usage`、`ttft_degraded_ms`、`tps_degraded_below`。
 
-EdgeOne Pages 如果不允许环境变量值包含空格，标题和副标题可以用 `--` 表示空格，单个 `-` 会原样保留：
+EdgeOne Pages 如果不允许环境变量值包含空格，`SITE_TITLE`、`SITE_SUBTITLE` 和 `LLM_PROMPT` 可以用 `_` 表示空格。其他环境变量不会做这个替换：
 
 ```env
-SITE_TITLE=LLM--API--Monitor
-SITE_SUBTITLE=OpenAI-compatible--stream
+SITE_TITLE=LLM_API_Monitor
+SITE_SUBTITLE=OpenAI-compatible_stream
+LLM_PROMPT=Reply_with_one_short_sentence.
 ```
 
 页脚 GitHub 链接固定为 `https://github.com/shentong0722/LLM_API_Monitor`，不提供环境变量修改。
 
 ## API
+
+## 状态规则
+
+全局状态不是只看最新一次采样，而是按最近 1 小时窗口计算。只有当某个模型最近 1 小时内超过 10% 的样本为降级或失败时，该模型才会显示为降级或故障。顶部全局状态卡片只显示当前有几个模型降级、几个模型故障。
 
 ### `GET /api/summary`
 

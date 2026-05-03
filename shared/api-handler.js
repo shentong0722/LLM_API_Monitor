@@ -344,7 +344,7 @@ function readConfig(env) {
     baseUrl: normalizeBaseUrl(env.LLM_API_BASE_URL || env.OPENAI_BASE_URL || DEFAULT_BASE_URL),
     apiPath: env.LLM_API_PATH || '/chat/completions',
     model: env.LLM_MODEL || env.OPENAI_MODEL || DEFAULT_MODEL,
-    prompt: env.LLM_PROMPT || DEFAULT_PROMPT,
+    prompt: env.LLM_PROMPT ? decodeDisplayEnv(env.LLM_PROMPT) : DEFAULT_PROMPT,
     maxTokens: toInteger(env.LLM_MAX_TOKENS, DEFAULT_MAX_TOKENS, 1, 4096),
     timeoutMs: toInteger(env.LLM_PROBE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1000, 120000),
     includeStreamUsage: env.LLM_STREAM_OPTIONS_INCLUDE_USAGE !== 'false',
@@ -611,16 +611,17 @@ function buildTargetSummaries(config, history, latestMap) {
   return config.targets.map((target) => {
     const targetHistory = history.filter((sample) => sample.target_id === target.id);
     const latest = latestMap[target.id] || targetHistory.at(-1) || null;
-    const status = computeTargetStatus(latest, target, config);
+    const health = computeTargetHealth(targetHistory, latest, target, config);
 
     return {
       id: target.id,
       label: target.label,
-      status,
+      status: health.status,
       config: publicTargetConfig(target),
       latest,
       summary: summarizeHistory(targetHistory, config),
       one_hour_summary: summarizeHistory(targetHistory, config, 1),
+      one_hour_health: health,
       history: targetHistory,
     };
   });
@@ -675,26 +676,91 @@ function computeFleetStatus(targets) {
   return 'up';
 }
 
-function computeTargetStatus(latest, target, config) {
+function computeTargetHealth(history, latest, target, config) {
   if (!latest) {
-    return 'unknown';
+    return createHealth('unknown');
   }
 
   const sampleAgeMs = Date.now() - Date.parse(latest.started_at);
   const staleAfterMs = Math.max(config.intervalSeconds * 3000, 180000);
 
   if (sampleAgeMs > staleAfterMs) {
-    return 'stale';
+    return createHealth('stale');
   }
 
-  if (!latest.ok) {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  const oneHourSamples = history.filter((sample) => Date.parse(sample.started_at) >= cutoff);
+
+  if (!oneHourSamples.length) {
+    return createHealth('up');
+  }
+
+  const counts = oneHourSamples.reduce(
+    (accumulator, sample) => {
+      const sampleStatus = classifySampleHealth(sample, target);
+      accumulator.total += 1;
+
+      if (sampleStatus === 'down') {
+        accumulator.down += 1;
+      }
+
+      if (sampleStatus === 'degraded') {
+        accumulator.degraded += 1;
+      }
+
+      return accumulator;
+    },
+    { total: 0, degraded: 0, down: 0 },
+  );
+
+  const incidentCount = counts.degraded + counts.down;
+  const incidentPct = counts.total ? (incidentCount / counts.total) * 100 : 0;
+  const downPct = counts.total ? (counts.down / counts.total) * 100 : 0;
+
+  if (incidentPct > 10) {
+    return {
+      status: downPct > 10 ? 'down' : 'degraded',
+      window_hours: 1,
+      total_samples: counts.total,
+      degraded_samples: counts.degraded,
+      failed_samples: counts.down,
+      incident_samples: incidentCount,
+      incident_pct: round(incidentPct, 4),
+    };
+  }
+
+  return {
+    status: 'up',
+    window_hours: 1,
+    total_samples: counts.total,
+    degraded_samples: counts.degraded,
+    failed_samples: counts.down,
+    incident_samples: incidentCount,
+    incident_pct: round(incidentPct, 4),
+  };
+}
+
+function createHealth(status) {
+  return {
+    status,
+    window_hours: 1,
+    total_samples: 0,
+    degraded_samples: 0,
+    failed_samples: 0,
+    incident_samples: 0,
+    incident_pct: null,
+  };
+}
+
+function classifySampleHealth(sample, target) {
+  if (!sample?.ok) {
     return 'down';
   }
 
   if (
-    Number.isFinite(latest.ttft_ms) &&
-    Number.isFinite(latest.tps) &&
-    (latest.ttft_ms > target.ttftDegradedMs || latest.tps < target.tpsDegradedBelow)
+    Number.isFinite(sample.ttft_ms) &&
+    Number.isFinite(sample.tps) &&
+    (sample.ttft_ms > target.ttftDegradedMs || sample.tps < target.tpsDegradedBelow)
   ) {
     return 'degraded';
   }
@@ -943,7 +1009,7 @@ function truncate(value, maxLength) {
 }
 
 function decodeDisplayEnv(value) {
-  return String(value || '').replace(/--/g, ' ');
+  return String(value || '').replace(/_/g, ' ');
 }
 
 function splitList(value) {
