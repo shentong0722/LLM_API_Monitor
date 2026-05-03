@@ -41,6 +41,9 @@ edgeone pages dev
 | `LLM_MODEL` | 单模型必填 | 单模型模式下的模型名 |
 | `LLM_MODELS` | 多模型推荐 | 同一个上游下的多模型列表，用英文逗号分隔，例如 `gpt-4o-mini,gpt-4.1-mini` |
 | `LLM_TARGETS` | 高级可选 | JSON 数组，用于配置不同上游、不同 key 或不同 prompt 的多个目标 |
+| `SITE_TITLE` | 否 | 面板标题，默认 `LLM API Monitor` |
+| `SITE_SUBTITLE` | 否 | 面板副标题，默认 `OpenAI-compatible stream` |
+| `PROJECT_REPO_URL` | 否 | 页脚 GitHub 链接 |
 | `LLM_PROMPT` | 否 | 固定提示词 |
 | `LLM_MAX_TOKENS` | 否 | 单次探测输出上限，默认 `80` |
 | `LLM_PROBE_INTERVAL_SECONDS` | 否 | 采样间隔，默认 `60` |
@@ -123,6 +126,7 @@ curl -fsS "https://your-domain/api/probe?token=PROBE_CRON_SECRET&target=deepseek
 5. 开通 Pages KV，创建 Namespace，并在项目里绑定 KV，变量名填写 `LLM_MONITOR_KV`。
    - KV 绑定不是普通文本环境变量，不需要再新增一个同名环境变量。
    - 绑定或修改 KV 后需要重新部署；线上是否真正生效以 `/api/summary` 返回的 `storage.type` 为准，正常应为 `edgeone-kv`。
+   - 代码会同时兼容 EdgeOne 示例中的全局 KV 绑定变量和 `context.env` 绑定变量。
 6. 部署项目。部署后确认：
    - `https://your-domain/api/health`
    - `https://your-domain/api/summary`
@@ -156,6 +160,37 @@ jobs:
 
 ```text
 https://your-domain/api/probe?token=your-secret
+```
+
+## Ubuntu Cron 示例
+
+创建探测脚本：
+
+```bash
+sudo mkdir -p /opt/llm-api-monitor
+sudo nano /opt/llm-api-monitor/probe.sh
+```
+
+写入：
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+curl -fsS --max-time 130 "https://your-domain/api/probe?token=your-secret" >/dev/null
+```
+
+启用脚本并配置定时任务：
+
+```bash
+sudo chmod +x /opt/llm-api-monitor/probe.sh
+crontab -e
+```
+
+每分钟执行一次：
+
+```cron
+* * * * * /opt/llm-api-monitor/probe.sh >> /var/log/llm-api-monitor-probe.log 2>&1
 ```
 
 ## 指标口径

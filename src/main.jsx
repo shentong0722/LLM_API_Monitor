@@ -85,6 +85,9 @@ function App() {
   const selectedStats = selectedTarget?.summary || {};
   const selectedHistory = selectedTarget?.history || [];
   const config = summary?.config || {};
+  const siteTitle = config.site_title || 'LLM API Monitor';
+  const siteSubtitle = config.site_subtitle || 'OpenAI-compatible stream';
+  const projectRepoUrl = config.project_repo_url || 'https://github.com/shentong0722/LLM_API_Monitor';
   const availableTargets = targets.filter((target) => target.latest?.ok && target.status !== 'stale').length;
   const failedTargets = targets.filter((target) => target.status === 'down').length;
 
@@ -96,8 +99,8 @@ function App() {
             <Activity size={22} aria-hidden="true" />
           </div>
           <div>
-            <h1>LLM API Monitor</h1>
-            <p>{targets.length ? `${targets.length} models · OpenAI-compatible stream` : 'OpenAI-compatible stream'}</p>
+            <h1>{siteTitle}</h1>
+            <p>{targets.length ? `${targets.length} models · ${siteSubtitle}` : siteSubtitle}</p>
           </div>
         </div>
 
@@ -235,6 +238,13 @@ function App() {
           <SampleTable rows={selectedHistory.slice(-12).reverse()} />
         </section>
       </main>
+
+      <footer className="footer">
+        <span>{siteTitle}</span>
+        <a href={projectRepoUrl} target="_blank" rel="noreferrer">
+          GitHub
+        </a>
+      </footer>
     </div>
   );
 }

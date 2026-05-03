@@ -10,6 +10,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_TOKENS = 80;
 const DEFAULT_HISTORY_LIMIT = 1440;
 const DEFAULT_WINDOW_HOURS = 24;
+const DEFAULT_SITE_TITLE = 'LLM API Monitor';
+const DEFAULT_SITE_SUBTITLE = 'OpenAI-compatible stream';
+const DEFAULT_PROJECT_REPO_URL = 'https://github.com/shentong0722/LLM_API_Monitor';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -357,6 +360,9 @@ function readConfig(env) {
     cronSecret: env.PROBE_CRON_SECRET || '',
     probeMode: env.LLM_PROBE_MODE === 'stagger' ? 'stagger' : 'parallel',
     probeStaggerMs: toInteger(env.LLM_PROBE_STAGGER_MS, 0, 0, 60000),
+    siteTitle: env.SITE_TITLE || env.PUBLIC_SITE_TITLE || DEFAULT_SITE_TITLE,
+    siteSubtitle: env.SITE_SUBTITLE || env.PUBLIC_SITE_SUBTITLE || DEFAULT_SITE_SUBTITLE,
+    projectRepoUrl: env.PROJECT_REPO_URL || env.PUBLIC_PROJECT_REPO_URL || DEFAULT_PROJECT_REPO_URL,
   };
 
   config.targets = readTargets(env, base);
@@ -439,6 +445,9 @@ function publicConfig(config) {
     max_tokens: config.maxTokens,
     window_hours: config.windowHours,
     probe_mode: config.probeMode,
+    site_title: config.siteTitle,
+    site_subtitle: config.siteSubtitle,
+    project_repo_url: config.projectRepoUrl,
     prompt_preview: truncate(config.prompt, 120),
   };
 }
@@ -459,7 +468,7 @@ function publicTargetConfig(target) {
 
 function getStore(context) {
   const env = context.env || {};
-  const kv = [env.LLM_MONITOR_KV, env.MONITOR_KV, env.KV].find(
+  const kv = [...getEnvKvCandidates(env), ...getGlobalKvCandidates()].find(
     (candidate) => candidate && typeof candidate.get === 'function' && typeof candidate.put === 'function',
   );
 
@@ -482,6 +491,21 @@ function getStore(context) {
       globalThis.__LLM_MONITOR_MEMORY_STORE.set(key, value);
     },
   };
+}
+
+function getEnvKvCandidates(env) {
+  return [env.LLM_MONITOR_KV, env.MONITOR_KV, env.KV];
+}
+
+function getGlobalKvCandidates() {
+  return [
+    typeof LLM_MONITOR_KV !== 'undefined' ? LLM_MONITOR_KV : null,
+    typeof MONITOR_KV !== 'undefined' ? MONITOR_KV : null,
+    typeof KV !== 'undefined' ? KV : null,
+    globalThis?.LLM_MONITOR_KV,
+    globalThis?.MONITOR_KV,
+    globalThis?.KV,
+  ];
 }
 
 async function readLatestMap(store, config) {

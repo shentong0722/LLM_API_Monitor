@@ -566,6 +566,26 @@ td {
   font-size: 14px;
 }
 
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px clamp(16px, 4vw, 42px) 34px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.footer a {
+  color: #1d4ed8;
+  font-weight: 760;
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 1100px) {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
