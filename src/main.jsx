@@ -97,7 +97,7 @@ function App() {
           <Notice tone="warn" icon={<AlertTriangle size={18} aria-hidden="true" />} text={error} />
         ) : null}
 
-        {!config.configured && !loading ? (
+        {summary && !config.configured && !loading ? (
           <Notice
             tone="danger"
             icon={<AlertTriangle size={18} aria-hidden="true" />}

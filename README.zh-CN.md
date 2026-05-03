@@ -83,6 +83,7 @@ edgeone pages dev
    - Build command：`npm run build`
    - Output directory：`dist`
    - Install command：`npm install`
+   - `npm run build` 会把 `edge-functions/` 同步到 `dist/edge-functions/`，用于兼容只发布输出目录的构建流程。
 4. 在项目环境变量中配置 `LLM_API_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`PROBE_CRON_SECRET` 等变量。
 5. 开通 Pages KV，创建 Namespace，并在项目里绑定 KV，变量名填写 `LLM_MONITOR_KV`。
 6. 部署项目。部署后确认：
