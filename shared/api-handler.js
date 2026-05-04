@@ -8,6 +8,8 @@ const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_TOKENS = 80;
+const FALLBACK_PROMPT = 'test';
+const FALLBACK_MAX_TOKENS = 10;
 const DEFAULT_HISTORY_RETENTION_HOURS = 168;
 const DEFAULT_UPTIME_WINDOW_HOURS = 24;
 const DEFAULT_GLOBAL_STATUS_WINDOW_HOURS = 1;
@@ -331,7 +333,35 @@ async function runProbe(target, context) {
       error: null,
     });
   } catch (error) {
+    const primaryError = sanitizeError(error);
+    clearTimeout(timeoutId);
+    const fallback = await runFallbackProbe(target);
     const endedMs = nowMs();
+
+    if (fallback.ok) {
+      return sanitizeSample({
+        id,
+        target_id: target.id,
+        target_label: target.label,
+        ok: true,
+        status: 'up',
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        model: target.model,
+        base_host: safeHostname(target.baseUrl),
+        region: context.server?.region || context.geo?.country || null,
+        http_status: fallback.httpStatus,
+        response_header_ms: Number.isFinite(fallback.responseHeaderMs) ? round(fallback.responseHeaderMs, 2) : null,
+        ttft_ms: null,
+        tps: null,
+        output_tokens: null,
+        token_count_source: 'fallback_non_stream',
+        stream_chunks: 0,
+        total_duration_ms: round(endedMs - startedMs, 2),
+        error: null,
+      });
+    }
+
     return sanitizeSample({
       id,
       target_id: target.id,
@@ -343,16 +373,90 @@ async function runProbe(target, context) {
       model: target.model,
       base_host: safeHostname(target.baseUrl),
       region: context.server?.region || context.geo?.country || null,
-      http_status: httpStatus,
-      response_header_ms: Number.isFinite(responseHeaderMs) ? round(responseHeaderMs, 2) : null,
+      http_status: fallback.httpStatus ?? httpStatus,
+      response_header_ms: Number.isFinite(responseHeaderMs)
+        ? round(responseHeaderMs, 2)
+        : Number.isFinite(fallback.responseHeaderMs)
+          ? round(fallback.responseHeaderMs, 2)
+          : null,
       ttft_ms: firstTokenMs ? round(firstTokenMs - startedMs, 2) : null,
       tps: null,
       output_tokens: null,
       token_count_source: null,
       stream_chunks: chunkCount,
       total_duration_ms: round(endedMs - startedMs, 2),
-      error: sanitizeError(error),
+      error: combineErrors(primaryError, `Fallback probe failed: ${fallback.error}`),
     });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function runFallbackProbe(target) {
+  const startedMs = nowMs();
+  const endpoint = buildEndpoint(target.baseUrl, target.apiPath);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort('timeout'), target.timeoutMs);
+
+  let httpStatus = null;
+  let responseHeaderMs = null;
+
+  try {
+    if (!target.apiKey) {
+      throw new Error(`API key for target ${target.label} is not configured`);
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${target.apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        model: target.model,
+        messages: [{ role: 'user', content: FALLBACK_PROMPT }],
+        temperature: 0,
+        stream: false,
+        max_tokens: FALLBACK_MAX_TOKENS,
+      }),
+      signal: controller.signal,
+    });
+
+    httpStatus = response.status;
+    responseHeaderMs = nowMs() - startedMs;
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(formatUpstreamHttpError(response.status, responseText));
+    }
+
+    const parsed = safeJsonParse(responseText);
+
+    if (!parsed) {
+      throw new Error('Fallback response was not valid JSON');
+    }
+
+    if (parsed.error) {
+      throw new Error(`Fallback response contained an error payload: ${formatPayloadError(parsed.error)}`);
+    }
+
+    if (!extractDeltaText(parsed)) {
+      throw new Error('Fallback response did not include content');
+    }
+
+    return {
+      ok: true,
+      httpStatus,
+      responseHeaderMs,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      httpStatus,
+      responseHeaderMs,
+      error: sanitizeError(error),
+    };
   } finally {
     clearTimeout(timeoutId);
   }
@@ -1109,6 +1213,18 @@ function formatUpstreamHttpError(status, bodyText) {
   const detail = trimmedBody || hints[status] || 'upstream returned a non-2xx response without an error body';
 
   return `Upstream HTTP ${status}: ${detail}`;
+}
+
+function formatPayloadError(error) {
+  if (typeof error === 'string') {
+    return truncate(error, 500);
+  }
+
+  return truncate(error?.message || error?.type || JSON.stringify(error), 500);
+}
+
+function combineErrors(...errors) {
+  return errors.filter(Boolean).join('; ');
 }
 
 function truncate(value, maxLength) {

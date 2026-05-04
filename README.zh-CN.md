@@ -9,6 +9,7 @@
 - 共享逻辑：`shared/api-handler.js`。
 - 存储：推荐绑定 EdgeOne Pages KV，变量名设置为 `LLM_MONITOR_KV`。
 - 定时：使用外部 Cron 定时请求 `/api/probe?token=...`，面板只读请求 `/api/summary`。
+- 回退：任意流式探测失败后，立即发起一次非流式存活探测。
 - 执行时长：探测接口使用 Cloud Functions，并在 `edgeone.json` 将 Node.js 最大执行时长配置为 120 秒，避免长流式请求被 Edge Functions 的短执行场景截断。
 - 构建环境：`edgeone.json` 固定构建 Node.js 版本为 `20.18.0`，并显式指定 Cloud Functions 中国大陆地域为 `ap-guangzhou`。
 
@@ -95,13 +96,15 @@ LLM_PROMPT=Reply_with_one_short_sentence.
 
 顶部全局状态不是只看最新一次采样，而是按最近 1 小时窗口计算。只有当某个模型最近 1 小时内达到 20% 的样本为降级或失败时，该模型才会计入顶部的降级或故障。模型概览列表中的正常/降级/故障仍然按每个模型最新一次样本显示。
 
+如果流式探测失败，但后续非流式回退探测成功，这条样本会按正常计入 uptime；TTFT 和 TPS 留空，并且不纳入性能平均值统计。
+
 ### `GET /api/summary`
 
 公开只读接口，返回全局状态、`targets[]`、每个模型的最新样本、历史样本、24 小时 uptime 和聚合指标。默认保留最近 7 天历史样本。
 
 ### `GET /api/probe?token=PROBE_CRON_SECRET`
 
-执行一次真实流式采样并写入 KV。默认会对所有到期模型并发发起探测。
+执行一次真实流式采样并写入 KV。默认会对所有到期模型并发发起探测。若流式探测失败，会立即发送一条非流式回退请求，提示词固定为 `test`，`max_tokens` 固定为 `10`；回退成功时样本显示为正常，但不记录 TTFT 和 TPS。
 
 常用调试参数：
 

@@ -9,6 +9,7 @@ LLM API Monitor is a public dashboard for measuring OpenAI-compatible streaming 
 - OpenAI-compatible `/chat/completions` streaming probe.
 - Multi-model monitoring with `LLM_MODELS` or advanced `LLM_TARGETS`.
 - TTFT, TPS, uptime, recent history, and per-model details.
+- Non-stream fallback health probe after any failed streaming probe.
 - EdgeOne Pages deployment with Cloud Functions.
 - Optional persistent history via EdgeOne Pages KV.
 - Custom dashboard title and subtitle.
@@ -74,6 +75,7 @@ Status and retention defaults:
 - Per-model uptime is calculated over the latest 24 hours.
 - The top global status is calculated over the latest 1 hour. A model only contributes degraded/down global status when at least 20% of its samples in that window are degraded or failed.
 - Each row in the model overview shows the latest sample status, while its TTFT and TPS columns show 1-hour averages.
+- If a streaming probe fails but the non-stream fallback succeeds, the sample is counted as up for uptime, while TTFT and TPS stay empty and are excluded from performance averages.
 
 ```env
 SITE_TITLE=LLM_API_Monitor
@@ -97,7 +99,7 @@ GET /api/probe?token=PROBE_CRON_SECRET&force=1
 GET /api/probe?token=PROBE_CRON_SECRET&target=model-id&force=1
 ```
 
-`/api/summary` returns public dashboard data. `/api/probe` sends real upstream streaming requests and writes samples to KV when KV is available.
+`/api/summary` returns public dashboard data. `/api/probe` sends real upstream streaming requests and writes samples to KV when KV is available. If the streaming probe fails, it immediately sends a non-stream fallback request with prompt `test` and `max_tokens: 10`; a successful fallback sample is marked up without TTFT or TPS.
 
 ## Status Rules
 
