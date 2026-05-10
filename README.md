@@ -99,7 +99,7 @@ GET /api/probe?token=PROBE_CRON_SECRET&force=1
 GET /api/probe?token=PROBE_CRON_SECRET&target=model-id&force=1
 ```
 
-`/api/summary` returns public dashboard data. `/api/probe` sends real upstream streaming requests and writes samples to KV when KV is available. If the streaming probe fails, it immediately sends a non-stream fallback request with prompt `test` and `max_tokens: 10`; a successful fallback sample is marked up without TTFT or TPS.
+`/api/summary` returns public dashboard data. It keeps aggregate metrics based on the full retained KV history, but only sends the recent history needed by the charts, uptime strip, and latest-samples table so periodic dashboard polling stays small. `/api/probe` sends real upstream streaming requests and writes samples to KV when KV is available. If the streaming probe fails, it immediately sends a non-stream fallback request with prompt `test` and `max_tokens: 10`; a successful fallback sample is marked up without TTFT or TPS.
 
 ## Status Rules
 

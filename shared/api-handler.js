@@ -17,6 +17,8 @@ const DEFAULT_GLOBAL_STATUS_INCIDENT_THRESHOLD_PCT = 20;
 const DEFAULT_SITE_TITLE = 'LLM API Monitor';
 const DEFAULT_SITE_SUBTITLE = 'OpenAI-compatible stream';
 const DEFAULT_PROJECT_REPO_URL = 'https://github.com/shentong0722/LLM_API_Monitor';
+const SUMMARY_UPTIME_SAMPLE_LIMIT = 120;
+const SUMMARY_CHART_POINT_LIMIT = 96;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -772,6 +774,7 @@ function buildTargetSummaries(config, history, latestMap) {
     const latest = latestMap[target.id] || targetHistory.at(-1) || null;
     const latestHealth = computeLatestTargetHealth(latest, target, config);
     const oneHourHealth = computeTargetWindowHealth(targetHistory, latest, target, config);
+    const responseHistory = buildResponseHistory(targetHistory);
 
     return {
       id: target.id,
@@ -783,9 +786,41 @@ function buildTargetSummaries(config, history, latestMap) {
       one_hour_summary: summarizeHistory(targetHistory, config, 1),
       latest_health: latestHealth,
       one_hour_health: oneHourHealth,
-      history: targetHistory,
+      history: responseHistory,
     };
   });
+}
+
+function buildResponseHistory(history) {
+  const selected = new Map();
+  const addSample = (sample) => {
+    if (!sample) {
+      return;
+    }
+
+    selected.set(sample.id || `${sample.target_id}:${sample.started_at}:${sample.ended_at}`, sample);
+  };
+
+  for (const sample of history.slice(-SUMMARY_UPTIME_SAMPLE_LIMIT)) {
+    addSample(sample);
+  }
+
+  for (const metric of ['ttft_ms', 'tps']) {
+    const chartPoints = history.filter((sample) => sample?.ok && Number.isFinite(sample?.[metric]));
+
+    for (const sample of chartPoints.slice(-SUMMARY_CHART_POINT_LIMIT)) {
+      addSample(sample);
+    }
+  }
+
+  return [...selected.values()].sort(compareSamplesByStartedAt);
+}
+
+function compareSamplesByStartedAt(left, right) {
+  const leftTime = Date.parse(left.started_at);
+  const rightTime = Date.parse(right.started_at);
+
+  return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
 }
 
 function summarizeHistory(history, config, windowHours = config.windowHours) {
@@ -1139,7 +1174,7 @@ function getApiAction(pathname) {
 }
 
 function json(payload, status = 200) {
-  return new Response(JSON.stringify(payload, null, 2), {
+  return new Response(JSON.stringify(payload), {
     status,
     headers: {
       ...CORS_HEADERS,

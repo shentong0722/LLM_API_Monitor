@@ -100,7 +100,7 @@ LLM_PROMPT=Reply_with_one_short_sentence.
 
 ### `GET /api/summary`
 
-公开只读接口，返回全局状态、`targets[]`、每个模型的最新样本、历史样本、24 小时 uptime 和聚合指标。默认保留最近 7 天历史样本。
+公开只读接口，返回全局状态、`targets[]`、每个模型的最新样本、面板展示所需的最近历史样本、24 小时 uptime 和聚合指标。KV 默认仍保留最近 7 天历史样本，聚合指标按完整保留历史计算；接口响应只下发图表、可用性条和最近采样表需要的历史数据，避免轮询下载全量历史。
 
 ### `GET /api/probe?token=PROBE_CRON_SECRET`
 
